@@ -5,6 +5,7 @@ import com.training.entity.*;
 import com.training.entity.dto.AnswerSubmitRequest;
 import com.training.entity.dto.ExamStartResponse;
 import com.training.mapper.*;
+import com.training.service.RemedialTaskService;
 import com.training.service.impl.ExamServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,6 +41,7 @@ class ExamServiceTest {
     @Mock private GradeMapper gradeMapper;
     @Mock private RedisTemplate<String, Object> redisTemplate;
     @Mock private ValueOperations<String, Object> valueOperations;
+    @Mock private RemedialTaskService remedialTaskService;
 
     @InjectMocks
     private ExamServiceImpl examService;
@@ -462,9 +464,6 @@ class ExamServiceTest {
             // Student answered "wrong" but correct was "A" -> incorrect
             assertEquals(0, graded.getIsCorrect());
             assertEquals(0.0, graded.getScoreEarned());
-
-            // Should not read from question table
-            verify(questionMapper, never()).selectById(anyLong());
         }
 
         @Test
@@ -636,6 +635,209 @@ class ExamServiceTest {
 
             verify(answerSheetMapper, times(1)).updateById(any(AnswerSheet.class));
             verify(answerDetailMapper, never()).selectList(any());
+        }
+    }
+
+    // ========================================================================
+    // Wrong Answer Remedial Trigger tests
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Wrong Answer Remedial Trigger (错题补学触发)")
+    class WrongAnswerRemedialTriggerTests {
+
+        @Test
+        @DisplayName("should create remedial tasks per chapter for wrong answers")
+        void shouldCreateRemedialTasksPerChapter() {
+            AnswerSheet.QuestionSnapshot snap1 = buildSnapshot(101L, 201L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
+            AnswerSheet.QuestionSnapshot snap2 = buildSnapshot(102L, 202L, "Q2", "SINGLE_CHOICE", "B", 20, 2);
+            AnswerSheet.QuestionSnapshot snap3 = buildSnapshot(103L, 203L, "Q3", "SINGLE_CHOICE", "C", 20, 3);
+
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap1, snap2, snap3))
+                    .build();
+
+            // Q1 wrong (chapter 10), Q2 wrong (chapter 20), Q3 correct
+            AnswerDetail d1 = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(101L).examQuestionId(201L)
+                    .studentAnswer("B").correctAnswer("A").snapshotScore(20).build();
+            AnswerDetail d2 = AnswerDetail.builder()
+                    .id(2L).answerSheetId(1L).questionId(102L).examQuestionId(202L)
+                    .studentAnswer("A").correctAnswer("B").snapshotScore(20).build();
+            AnswerDetail d3 = AnswerDetail.builder()
+                    .id(3L).answerSheetId(1L).questionId(103L).examQuestionId(203L)
+                    .studentAnswer("C").correctAnswer("C").snapshotScore(20).build();
+
+            Question q1 = Question.builder().id(101L).chapterId(10L).build();
+            Question q2 = Question.builder().id(102L).chapterId(20L).build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class))).thenReturn(null);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(d1, d2, d3));
+            // wrongAnswerRemedialTrigger calls questionMapper for wrong answers
+            when(questionMapper.selectById(101L)).thenReturn(q1);
+            when(questionMapper.selectById(102L)).thenReturn(q2);
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+            examService.submitExam(req, 1L);
+
+            // Should create remedial task for chapter 10 and chapter 20
+            verify(remedialTaskService).create(1L, 10L, 10L, null, "EXAM_WRONG_ANSWER");
+            verify(remedialTaskService).create(1L, 10L, 20L, null, "EXAM_WRONG_ANSWER");
+            verify(remedialTaskService, times(2)).create(anyLong(), anyLong(), anyLong(), any(), anyString());
+        }
+
+        @Test
+        @DisplayName("should not create remedial tasks when all answers are correct")
+        void shouldNotCreateRemedialWhenAllCorrect() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(101L, 201L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
+
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
+
+            AnswerDetail d1 = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(101L).examQuestionId(201L)
+                    .studentAnswer("A").correctAnswer("A").snapshotScore(20).build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class))).thenReturn(null);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(d1));
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+            examService.submitExam(req, 1L);
+
+            // No wrong answers → no remedial tasks
+            verify(remedialTaskService, never()).create(anyLong(), anyLong(), anyLong(), any(), anyString());
+        }
+
+        @Test
+        @DisplayName("remedial trigger failure should not break exam submission")
+        void remedialTriggerFailureShouldNotBreakSubmission() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(101L, 201L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
+
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
+
+            AnswerDetail d1 = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(101L).examQuestionId(201L)
+                    .studentAnswer("B").correctAnswer("A").snapshotScore(20).build();
+
+            Question q1 = Question.builder().id(101L).chapterId(10L).build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class))).thenReturn(null);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(d1));
+            when(questionMapper.selectById(101L)).thenReturn(q1);
+            // Remedial service throws exception
+            doThrow(new RuntimeException("DB connection failed"))
+                    .when(remedialTaskService).create(anyLong(), anyLong(), anyLong(), any(), anyString());
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+            // Should NOT throw — submission completes despite remedial failure
+            AnswerSheet result = examService.submitExam(req, 1L);
+
+            assertEquals("SUBMITTED", result.getStatus());
+            verify(gradeMapper).insert(any(Grade.class));
+        }
+    }
+
+    // ========================================================================
+    // Concurrent Exam Start tests
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Concurrent Exam Start (并发开考)")
+    class ConcurrentExamStartTests {
+
+        @Test
+        @DisplayName("should return existing IN_PROGRESS sheet instead of creating duplicate")
+        void shouldReturnExistingInProgressSheet() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    100L, 1L, "What is Java?", "SINGLE_CHOICE", "A", 20, 1);
+
+            AnswerSheet existingSheet = AnswerSheet.builder()
+                    .id(5L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").remainingSeconds(3000)
+                    .startTime(LocalDateTime.now().minusMinutes(10))
+                    .tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
+
+            AnswerDetail existingDetail = AnswerDetail.builder()
+                    .id(10L).answerSheetId(5L).questionId(100L).examQuestionId(1L)
+                    .correctAnswer("A").snapshotScore(20)
+                    .build();
+
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(0L);
+            // Second concurrent call finds existing IN_PROGRESS sheet
+            when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(existingDetail));
+            when(redisTemplate.getExpire(anyString(), eq(TimeUnit.SECONDS))).thenReturn(2800L);
+
+            ExamStartResponse response = examService.startExam(1L, 1L);
+
+            assertTrue(response.getResumed());
+            assertEquals(5L, response.getAnswerSheetId());
+            // No new sheet created — reuses existing one
+            verify(answerSheetMapper, never()).insert(any());
+            verify(answerDetailMapper, never()).insert(any());
+        }
+    }
+
+    // ========================================================================
+    // Timeout with Remedial Trigger tests
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Timeout with Remedial (超时触发补学)")
+    class TimeoutWithRemedialTests {
+
+        @Test
+        @DisplayName("timeout auto-submit should trigger remedial for wrong/unanswered questions")
+        void timeoutShouldTriggerRemedialForWrongAnswers() {
+            AnswerSheet.QuestionSnapshot snap1 = buildSnapshot(101L, 201L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
+            AnswerSheet.QuestionSnapshot snap2 = buildSnapshot(102L, 202L, "Q2", "SINGLE_CHOICE", "B", 20, 2);
+
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap1, snap2))
+                    .build();
+
+            // Q1: answered wrong, Q2: unanswered (null studentAnswer)
+            AnswerDetail d1 = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(101L).examQuestionId(201L)
+                    .studentAnswer("C").correctAnswer("A").snapshotScore(20).build();
+            AnswerDetail d2 = AnswerDetail.builder()
+                    .id(2L).answerSheetId(1L).questionId(102L).examQuestionId(202L)
+                    .studentAnswer(null).correctAnswer("B").snapshotScore(20).build();
+
+            Question q1 = Question.builder().id(101L).chapterId(10L).build();
+            Question q2 = Question.builder().id(102L).chapterId(20L).build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(d1, d2));
+            when(questionMapper.selectById(101L)).thenReturn(q1);
+            when(questionMapper.selectById(102L)).thenReturn(q2);
+
+            examService.handleTimeout(1L);
+
+            // Both wrong → remedial tasks for both chapters
+            verify(remedialTaskService).create(1L, 10L, 10L, null, "EXAM_WRONG_ANSWER");
+            verify(remedialTaskService).create(1L, 10L, 20L, null, "EXAM_WRONG_ANSWER");
         }
     }
 }

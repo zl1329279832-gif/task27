@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS course (
     difficulty VARCHAR(50),
     total_hours DECIMAL(10,2),
     status VARCHAR(50),
+    version INT DEFAULT 1,
     created_at TIMESTAMP,
     updated_at TIMESTAMP
 );
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS exam_question (
 CREATE TABLE IF NOT EXISTS question (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     course_id BIGINT,
+    chapter_id BIGINT,
     instructor_id BIGINT,
     content TEXT,
     question_type VARCHAR(50),
@@ -130,6 +132,7 @@ CREATE TABLE IF NOT EXISTS certificate (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     student_id BIGINT,
     course_id BIGINT,
+    course_version INT DEFAULT 1,
     cert_no VARCHAR(100),
     title VARCHAR(255),
     issue_date DATE,
@@ -204,4 +207,119 @@ CREATE TABLE IF NOT EXISTS clazz_student (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     clazz_id BIGINT,
     student_id BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_mastery (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    chapter_id BIGINT,
+    mastery_level VARCHAR(30) DEFAULT 'NOT_MASTERED',
+    learning_progress DECIMAL(5,2) DEFAULT 0,
+    study_duration_seconds INT DEFAULT 0,
+    expected_duration_seconds INT DEFAULT 0,
+    wrong_answer_count INT DEFAULT 0,
+    total_answer_count INT DEFAULT 0,
+    tab_switch_count INT DEFAULT 0,
+    last_evaluated_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS learning_path (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    title VARCHAR(200),
+    status VARCHAR(30) DEFAULT 'GENERATED',
+    total_items INT DEFAULT 0,
+    completed_items INT DEFAULT 0,
+    generated_reason VARCHAR(100),
+    expires_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS learning_path_item (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    path_id BIGINT,
+    item_type VARCHAR(20),
+    ref_id BIGINT,
+    sort_order INT DEFAULT 0,
+    status VARCHAR(30) DEFAULT 'PENDING',
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS certificate_renewal_rule (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT,
+    renewal_period_days INT DEFAULT 365,
+    advance_notice_days INT DEFAULT 30,
+    require_exam_pass INT DEFAULT 1,
+    min_exam_score INT,
+    version_change_policy VARCHAR(30) DEFAULT 'RELEARN',
+    role_exemptions VARCHAR(500),
+    enabled INT DEFAULT 1,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS certificate_renewal (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    certificate_id BIGINT,
+    student_id BIGINT,
+    course_id BIGINT,
+    decision VARCHAR(30),
+    decision_reason VARCHAR(500),
+    old_expiry_date DATE,
+    new_expiry_date DATE,
+    course_version_at_issue INT,
+    course_version_current INT,
+    latest_exam_score DECIMAL(5,1),
+    operator_id BIGINT,
+    status VARCHAR(30) DEFAULT 'PENDING',
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS remedial_task (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    chapter_id BIGINT,
+    path_id BIGINT,
+    source VARCHAR(30),
+    status VARCHAR(20) DEFAULT 'PENDING',
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS makeup_exam_task (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    exam_id BIGINT,
+    path_id BIGINT,
+    source VARCHAR(30),
+    status VARCHAR(20) DEFAULT 'PENDING',
+    scheduled_at TIMESTAMP,
+    answer_sheet_id BIGINT,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    operator_id BIGINT,
+    operator_role VARCHAR(20),
+    action_type VARCHAR(50),
+    target_type VARCHAR(50),
+    target_id BIGINT,
+    details CLOB,
+    created_at TIMESTAMP
 );

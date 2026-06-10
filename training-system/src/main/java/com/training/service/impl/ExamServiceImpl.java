@@ -8,8 +8,10 @@ import com.training.entity.*;
 import com.training.entity.dto.*;
 import com.training.mapper.*;
 import com.training.service.ExamService;
+import com.training.service.RemedialTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,7 +23,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ExamServiceImpl implements ExamService {
 
     private final ExamMapper examMapper;
@@ -31,6 +32,25 @@ public class ExamServiceImpl implements ExamService {
     private final AnswerDetailMapper answerDetailMapper;
     private final GradeMapper gradeMapper;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final RemedialTaskService remedialTaskService;
+
+    public ExamServiceImpl(ExamMapper examMapper,
+                           ExamQuestionMapper examQuestionMapper,
+                           QuestionMapper questionMapper,
+                           AnswerSheetMapper answerSheetMapper,
+                           AnswerDetailMapper answerDetailMapper,
+                           GradeMapper gradeMapper,
+                           RedisTemplate<String, Object> redisTemplate,
+                           @Lazy RemedialTaskService remedialTaskService) {
+        this.examMapper = examMapper;
+        this.examQuestionMapper = examQuestionMapper;
+        this.questionMapper = questionMapper;
+        this.answerSheetMapper = answerSheetMapper;
+        this.answerDetailMapper = answerDetailMapper;
+        this.gradeMapper = gradeMapper;
+        this.redisTemplate = redisTemplate;
+        this.remedialTaskService = remedialTaskService;
+    }
 
     @Override
     public Exam create(ExamRequest req, Long instructorId) {
@@ -516,9 +536,38 @@ public class ExamServiceImpl implements ExamService {
                     .gradedAt(LocalDateTime.now())
                     .build();
             gradeMapper.insert(grade);
+
+            // Trigger remedial tasks for wrong answers
+            try {
+                wrongAnswerRemedialTrigger(sheet, details, exam.getCourseId());
+            } catch (Exception e) {
+                log.warn("Failed to trigger remedial tasks: {}", e.getMessage());
+            }
         }
 
         return sheet;
+    }
+
+    private void wrongAnswerRemedialTrigger(AnswerSheet sheet, List<AnswerDetail> details, Long courseId) {
+        List<AnswerDetail> wrongAnswers = details.stream()
+                .filter(d -> d.getIsCorrect() != null && d.getIsCorrect() == 0)
+                .collect(Collectors.toList());
+
+        if (wrongAnswers.isEmpty()) return;
+
+        // Group wrong answers by chapter via question.chapterId
+        Map<Long, List<AnswerDetail>> wrongByChapter = new HashMap<>();
+        for (AnswerDetail d : wrongAnswers) {
+            Question q = questionMapper.selectById(d.getQuestionId());
+            if (q != null && q.getChapterId() != null) {
+                wrongByChapter.computeIfAbsent(q.getChapterId(), k -> new ArrayList<>()).add(d);
+            }
+        }
+
+        // Create remedial task per chapter
+        for (Long chapterId : wrongByChapter.keySet()) {
+            remedialTaskService.create(sheet.getStudentId(), courseId, chapterId, null, "EXAM_WRONG_ANSWER");
+        }
     }
 
     @Override

@@ -31,6 +31,7 @@ public class LearningRecordServiceImpl implements LearningRecordService {
     private final ChapterMapper chapterMapper;
     private final CourseMapper courseMapper;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final RemedialTaskMapper remedialTaskMapper;
 
     private static final String LEARNING_CACHE_PREFIX = "learning:";
     private static final long CACHE_TTL_HOURS = 1;
@@ -109,6 +110,28 @@ public class LearningRecordServiceImpl implements LearningRecordService {
 
         // 9. Save to DB
         learningRecordMapper.updateById(record);
+
+        // 10. Auto-complete remedial task when chapter study is completed
+        if ("COMPLETED".equals(record.getStatus())) {
+            try {
+                autoCompleteRemedialTask(studentId, record.getChapterId());
+            } catch (Exception e) {
+                log.warn("Failed to auto-complete remedial task: {}", e.getMessage());
+            }
+        }
+    }
+
+    private void autoCompleteRemedialTask(Long studentId, Long chapterId) {
+        List<RemedialTask> pendingTasks = remedialTaskMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<RemedialTask>()
+                        .eq(RemedialTask::getStudentId, studentId)
+                        .eq(RemedialTask::getChapterId, chapterId)
+                        .in(RemedialTask::getStatus, "PENDING", "IN_PROGRESS"));
+        for (RemedialTask task : pendingTasks) {
+            task.setStatus("COMPLETED");
+            task.setCompletedAt(LocalDateTime.now());
+            remedialTaskMapper.updateById(task);
+        }
     }
 
     @Override

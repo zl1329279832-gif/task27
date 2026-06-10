@@ -24,6 +24,8 @@ public class Question {
 
     private Long courseId;
 
+    private Long chapterId;
+
     private Long instructorId;
 
     private String content;

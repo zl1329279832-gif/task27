@@ -36,6 +36,8 @@ public class Course {
 
     private String status;
 
+    private Integer version;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

@@ -8,6 +8,7 @@ import com.training.entity.*;
 import com.training.entity.dto.CertificateIssueRequest;
 import com.training.entity.dto.CertificateRevokeRequest;
 import com.training.mapper.*;
+import com.training.service.AuditLogService;
 import com.training.service.CertificateService;
 import com.training.service.LearningRecordService;
 import com.training.util.CertNoGenerator;
@@ -30,6 +31,8 @@ public class CertificateServiceImpl implements CertificateService {
     private final GradeMapper gradeMapper;
     private final ExamMapper examMapper;
     private final CertNoGenerator certNoGenerator;
+    private final CourseMapper courseMapper;
+    private final AuditLogService auditLogService;
 
     @Value("${certificate.verify-token-expiration-days:7}")
     private int verifyTokenExpirationDays;
@@ -86,9 +89,14 @@ public class CertificateServiceImpl implements CertificateService {
             expiryDate = LocalDate.parse(req.getExpiryDate());
         }
 
+        // Get course version for tracking
+        Course course = courseMapper.selectById(courseId);
+        Integer courseVersion = (course != null && course.getVersion() != null) ? course.getVersion() : 1;
+
         Certificate certificate = Certificate.builder()
                 .studentId(studentId)
                 .courseId(courseId)
+                .courseVersion(courseVersion)
                 .certNo(certNo)
                 .title(title)
                 .issueDate(LocalDate.now())
@@ -146,6 +154,9 @@ public class CertificateServiceImpl implements CertificateService {
                 .revokedBy(operatorId)
                 .build();
         revocationMapper.insert(revocation);
+
+        auditLogService.log(operatorId, null, "CERT_STATUS_CHANGED", "CERTIFICATE", id,
+                "{\"action\":\"REVOKE\",\"reason\":\"" + req.getReason() + "\"}");
     }
 
     @Override

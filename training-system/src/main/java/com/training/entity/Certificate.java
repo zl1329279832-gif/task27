@@ -26,6 +26,8 @@ public class Certificate {
 
     private Long courseId;
 
+    private Integer courseVersion;
+
     @TableField("cert_no")
     private String certNo;
 

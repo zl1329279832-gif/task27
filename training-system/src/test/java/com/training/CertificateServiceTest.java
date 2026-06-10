@@ -4,7 +4,10 @@ import com.training.common.BusinessException;
 import com.training.entity.*;
 import com.training.entity.dto.CertificateIssueRequest;
 import com.training.entity.dto.CertificateRevokeRequest;
+import com.training.service.CertificateRenewalService;
 import com.training.mapper.*;
+import com.training.service.AuditLogService;
+import com.training.service.CertificateRenewalService;
 import com.training.service.LearningRecordService;
 import com.training.service.impl.CertificateServiceImpl;
 import com.training.util.CertNoGenerator;
@@ -39,6 +42,8 @@ class CertificateServiceTest {
     @Mock private GradeMapper gradeMapper;
     @Mock private ExamMapper examMapper;
     @Mock private CertNoGenerator certNoGenerator;
+    @Mock private CourseMapper courseMapper;
+    @Mock private AuditLogService auditLogService;
 
     @InjectMocks
     private CertificateServiceImpl certificateService;
@@ -378,6 +383,77 @@ class CertificateServiceTest {
 
             // Must NOT update the certificate
             verify(certificateMapper, never()).updateById(any());
+        }
+    }
+
+    // ========================================================================
+    // Renewal Blocking tests (integration point: revoked cert blocks renewal)
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Renewal Blocking (撤销证书拦截续期)")
+    class RenewalBlockingTests {
+
+        @Mock
+        private CertificateRenewalService certificateRenewalService;
+
+        @Test
+        @DisplayName("revoked certificate status should persist correctly for renewal check")
+        void revokedStatusShouldPersistForRenewalCheck() {
+            CertificateRevokeRequest req = new CertificateRevokeRequest();
+            req.setReason("Compliance violation");
+
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
+
+            certificateService.revoke(1L, req, 99L);
+
+            // Verify the cert status is now REVOKED in the update call
+            ArgumentCaptor<Certificate> captor = ArgumentCaptor.forClass(Certificate.class);
+            verify(certificateMapper).updateById(captor.capture());
+            Certificate revokedCert = captor.getValue();
+
+            assertEquals("REVOKED", revokedCert.getStatus());
+            assertNotNull(revokedCert.getRevokedAt());
+            assertNotNull(revokedCert.getRevokeReason());
+            // This is the state that CertificateRenewalService checks to block renewal
+        }
+
+        @Test
+        @DisplayName("revoked certificate should have audit log entry for revocation")
+        void revokedCertShouldHaveAuditLog() {
+            CertificateRevokeRequest req = new CertificateRevokeRequest();
+            req.setReason("Data breach");
+
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
+
+            certificateService.revoke(1L, req, 99L);
+
+            // Audit log should record the revocation
+            verify(auditLogService).log(eq(99L), isNull(), eq("CERT_STATUS_CHANGED"),
+                    eq("CERTIFICATE"), eq(1L), contains("REVOKE"));
+        }
+
+        @Test
+        @DisplayName("issue should track course version for future renewal evaluation")
+        void issueShouldTrackCourseVersion() {
+            CertificateIssueRequest req = new CertificateIssueRequest();
+            req.setStudentId(1L);
+            req.setCourseId(10L);
+            req.setTitle("Test Cert");
+
+            Course course = Course.builder().id(10L).version(3).build();
+
+            when(certificateMapper.selectOne(any())).thenReturn(null);
+            when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(100.0);
+            Grade passingGrade = Grade.builder().id(1L).studentId(1L).courseId(10L).pass(1).build();
+            when(gradeMapper.selectList(any())).thenReturn(List.of(passingGrade));
+            when(certNoGenerator.generate(10L)).thenReturn("CERT-10-20260610-0002");
+            when(courseMapper.selectById(10L)).thenReturn(course);
+
+            Certificate result = certificateService.issue(req, 1L);
+
+            // courseVersion should be tracked for renewal version-change detection
+            assertEquals(3, result.getCourseVersion());
         }
     }
 }
