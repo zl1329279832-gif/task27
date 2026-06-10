@@ -285,6 +285,206 @@ CREATE TABLE certificate_revocation (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Certificate revocation log';
 
 -- ----------------------------
+-- 17. knowledge_point
+-- ----------------------------
+CREATE TABLE knowledge_point (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT NOT NULL,
+    chapter_id BIGINT,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    sort_order INT DEFAULT 0,
+    parent_kp_id BIGINT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_kp_course (course_id),
+    INDEX idx_kp_chapter (chapter_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Knowledge points';
+
+-- ----------------------------
+-- 18. question_knowledge_point
+-- ----------------------------
+CREATE TABLE question_knowledge_point (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    question_id BIGINT NOT NULL,
+    knowledge_point_id BIGINT NOT NULL,
+    UNIQUE KEY uk_question_kp (question_id, knowledge_point_id),
+    INDEX idx_qkp_kp (knowledge_point_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Question-knowledge point mapping';
+
+-- ----------------------------
+-- 19. knowledge_point_mastery
+-- ----------------------------
+CREATE TABLE knowledge_point_mastery (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT NOT NULL,
+    knowledge_point_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    mastery_level DECIMAL(5,2) DEFAULT 0.00,
+    total_questions INT DEFAULT 0,
+    correct_count INT DEFAULT 0,
+    exam_attempts INT DEFAULT 0,
+    status VARCHAR(50) DEFAULT 'UNMASTERED' COMMENT 'UNMASTERED/PARTIAL/MASTERED',
+    last_assessed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_mastery_student_kp (student_id, knowledge_point_id),
+    INDEX idx_mastery_student_course (student_id, course_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Student knowledge point mastery';
+
+-- ----------------------------
+-- 20. learning_path
+-- ----------------------------
+CREATE TABLE learning_path (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    clazz_id BIGINT,
+    status VARCHAR(50) DEFAULT 'GENERATED' COMMENT 'GENERATED/IN_PROGRESS/COMPLETED/EXPIRED',
+    trigger_reason VARCHAR(50) DEFAULT 'INITIAL' COMMENT 'INITIAL/EXAM_FAIL/CERT_RENEWAL/MANUAL',
+    path_data JSON COMMENT 'List of PathStep',
+    total_steps INT DEFAULT 0,
+    completed_steps INT DEFAULT 0,
+    generated_by BIGINT,
+    generated_at DATETIME,
+    completed_at DATETIME,
+    expires_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_lp_student_course (student_id, course_id),
+    INDEX idx_lp_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Adaptive learning paths';
+
+-- ----------------------------
+-- 21. remedial_task
+-- ----------------------------
+CREATE TABLE remedial_task (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    learning_path_id BIGINT,
+    knowledge_point_id BIGINT,
+    chapter_id BIGINT,
+    task_type VARCHAR(50) NOT NULL COMMENT 'REMEDIAL_CHAPTER/REVIEW_MATERIAL',
+    status VARCHAR(50) DEFAULT 'PENDING' COMMENT 'PENDING/IN_PROGRESS/COMPLETED/EXPIRED',
+    required_progress DECIMAL(5,2) DEFAULT 100.00,
+    achieved_progress DECIMAL(5,2) DEFAULT 0.00,
+    deadline DATETIME,
+    completed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_rt_student (student_id),
+    INDEX idx_rt_path (learning_path_id),
+    INDEX idx_rt_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Remedial learning tasks';
+
+-- ----------------------------
+-- 22. makeup_exam
+-- ----------------------------
+CREATE TABLE makeup_exam (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    exam_id BIGINT NOT NULL,
+    learning_path_id BIGINT,
+    answer_sheet_id BIGINT,
+    status VARCHAR(50) DEFAULT 'PENDING' COMMENT 'PENDING/IN_PROGRESS/PASSED/FAILED/EXPIRED',
+    max_attempts INT DEFAULT 2,
+    attempts_used INT DEFAULT 0,
+    required_score DECIMAL(5,2),
+    achieved_score DECIMAL(5,2),
+    deadline DATETIME,
+    completed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_me_student (student_id),
+    INDEX idx_me_path (learning_path_id),
+    INDEX idx_me_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Makeup exam tasks';
+
+-- ----------------------------
+-- 23. certificate_renewal_rule
+-- ----------------------------
+CREATE TABLE certificate_renewal_rule (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT NOT NULL,
+    role_pattern VARCHAR(100) DEFAULT '*' COMMENT 'Role wildcard pattern',
+    expiry_threshold_days INT DEFAULT 90,
+    min_course_version INT DEFAULT 1,
+    min_recent_exam_score DECIMAL(5,2),
+    recent_exam_within_months INT,
+    renewal_action VARCHAR(50) NOT NULL COMMENT 'FULL_RELEARN/MAKEUP_EXAM/DIRECT_RENEWAL',
+    description TEXT,
+    sort_order INT DEFAULT 0,
+    enabled INT DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_crr_course (course_id),
+    INDEX idx_crr_enabled (enabled, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Certificate renewal rules';
+
+-- ----------------------------
+-- 24. certificate_renewal
+-- ----------------------------
+CREATE TABLE certificate_renewal (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    certificate_id BIGINT NOT NULL,
+    student_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    renewal_rule_id BIGINT,
+    renewal_action VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'PENDING' COMMENT 'PENDING/IN_PROGRESS/COMPLETED/REJECTED/EXPIRED',
+    new_certificate_id BIGINT,
+    learning_path_id BIGINT,
+    makeup_exam_id BIGINT,
+    rejection_reason VARCHAR(500),
+    processed_by BIGINT,
+    processed_at DATETIME,
+    deadline DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_cr_cert (certificate_id),
+    INDEX idx_cr_student (student_id),
+    INDEX idx_cr_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Certificate renewal records';
+
+-- ----------------------------
+-- 25. audit_log
+-- ----------------------------
+CREATE TABLE audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    action VARCHAR(100) NOT NULL,
+    target_type VARCHAR(100) NOT NULL,
+    target_id BIGINT,
+    actor_id BIGINT,
+    actor_role VARCHAR(50),
+    details JSON,
+    ip_address VARCHAR(50),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_target (target_type, target_id),
+    INDEX idx_audit_actor (actor_id),
+    INDEX idx_audit_action (action),
+    INDEX idx_audit_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Audit log';
+
+-- ----------------------------
+-- 26. course_version_history
+-- ----------------------------
+CREATE TABLE course_version_history (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT NOT NULL,
+    from_version INT NOT NULL,
+    to_version INT NOT NULL,
+    change_summary JSON,
+    changed_by BIGINT,
+    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_cvh_course (course_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Course version history';
+
+-- Add version column to course table
+ALTER TABLE course ADD COLUMN version INT DEFAULT 1;
+
+-- ----------------------------
 -- Seed data
 -- ----------------------------
 INSERT INTO sys_user (username, password, real_name, email, role, status) VALUES

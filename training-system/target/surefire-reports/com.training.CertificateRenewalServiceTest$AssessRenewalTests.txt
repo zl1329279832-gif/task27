@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.training.CertificateRenewalServiceTest$AssessRenewalTests
+-------------------------------------------------------------------------------
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.126 s -- in com.training.CertificateRenewalServiceTest$AssessRenewalTests

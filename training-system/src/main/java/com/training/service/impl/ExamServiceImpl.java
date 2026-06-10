@@ -8,6 +8,8 @@ import com.training.entity.*;
 import com.training.entity.dto.*;
 import com.training.mapper.*;
 import com.training.service.ExamService;
+import com.training.service.KnowledgePointMasteryService;
+import com.training.service.LearningPathService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -31,6 +33,8 @@ public class ExamServiceImpl implements ExamService {
     private final AnswerDetailMapper answerDetailMapper;
     private final GradeMapper gradeMapper;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final KnowledgePointMasteryService knowledgePointMasteryService;
+    private final LearningPathService learningPathService;
 
     @Override
     public Exam create(ExamRequest req, Long instructorId) {
@@ -516,6 +520,25 @@ public class ExamServiceImpl implements ExamService {
                     .gradedAt(LocalDateTime.now())
                     .build();
             gradeMapper.insert(grade);
+
+            // Update knowledge point mastery from exam results
+            try {
+                knowledgePointMasteryService.updateMasteryFromExam(
+                        sheet.getStudentId(), exam.getCourseId(), sheet.getId());
+            } catch (Exception e) {
+                log.warn("更新知识点掌握度失败: sheetId={}", sheet.getId(), e);
+            }
+
+            // If student failed, auto-generate remedial learning path
+            if (grade.getPass() == 0) {
+                try {
+                    learningPathService.generatePath(
+                            sheet.getStudentId(), exam.getCourseId(), "EXAM_FAIL", null);
+                } catch (Exception e) {
+                    log.warn("生成补学路径失败: studentId={}, courseId={}",
+                            sheet.getStudentId(), exam.getCourseId(), e);
+                }
+            }
         }
 
         return sheet;

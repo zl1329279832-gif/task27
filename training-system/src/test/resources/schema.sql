@@ -205,3 +205,148 @@ CREATE TABLE IF NOT EXISTS clazz_student (
     clazz_id BIGINT,
     student_id BIGINT
 );
+
+CREATE TABLE IF NOT EXISTS knowledge_point (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT,
+    chapter_id BIGINT,
+    name VARCHAR(255),
+    description TEXT,
+    sort_order INT DEFAULT 0,
+    parent_kp_id BIGINT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS question_knowledge_point (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    question_id BIGINT,
+    knowledge_point_id BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_point_mastery (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    knowledge_point_id BIGINT,
+    course_id BIGINT,
+    mastery_level DECIMAL(5,2) DEFAULT 0,
+    total_questions INT DEFAULT 0,
+    correct_count INT DEFAULT 0,
+    exam_attempts INT DEFAULT 0,
+    status VARCHAR(50) DEFAULT 'UNMASTERED',
+    last_assessed_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS learning_path (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    clazz_id BIGINT,
+    status VARCHAR(50) DEFAULT 'GENERATED',
+    trigger_reason VARCHAR(50) DEFAULT 'INITIAL',
+    path_data CLOB,
+    total_steps INT DEFAULT 0,
+    completed_steps INT DEFAULT 0,
+    generated_by BIGINT,
+    generated_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS remedial_task (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    learning_path_id BIGINT,
+    knowledge_point_id BIGINT,
+    chapter_id BIGINT,
+    task_type VARCHAR(50),
+    status VARCHAR(50) DEFAULT 'PENDING',
+    required_progress DECIMAL(5,2) DEFAULT 100,
+    achieved_progress DECIMAL(5,2) DEFAULT 0,
+    deadline TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS makeup_exam (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    student_id BIGINT,
+    course_id BIGINT,
+    exam_id BIGINT,
+    learning_path_id BIGINT,
+    answer_sheet_id BIGINT,
+    status VARCHAR(50) DEFAULT 'PENDING',
+    max_attempts INT DEFAULT 2,
+    attempts_used INT DEFAULT 0,
+    required_score DECIMAL(5,2),
+    achieved_score DECIMAL(5,2),
+    deadline TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS certificate_renewal_rule (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT,
+    role_pattern VARCHAR(100) DEFAULT '*',
+    expiry_threshold_days INT DEFAULT 90,
+    min_course_version INT DEFAULT 1,
+    min_recent_exam_score DECIMAL(5,2),
+    recent_exam_within_months INT,
+    renewal_action VARCHAR(50),
+    description TEXT,
+    sort_order INT DEFAULT 0,
+    enabled INT DEFAULT 1,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS certificate_renewal (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    certificate_id BIGINT,
+    student_id BIGINT,
+    course_id BIGINT,
+    renewal_rule_id BIGINT,
+    renewal_action VARCHAR(50),
+    status VARCHAR(50) DEFAULT 'PENDING',
+    new_certificate_id BIGINT,
+    learning_path_id BIGINT,
+    makeup_exam_id BIGINT,
+    rejection_reason VARCHAR(500),
+    processed_by BIGINT,
+    processed_at TIMESTAMP,
+    deadline TIMESTAMP,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    action VARCHAR(100),
+    target_type VARCHAR(100),
+    target_id BIGINT,
+    actor_id BIGINT,
+    actor_role VARCHAR(50),
+    details CLOB,
+    ip_address VARCHAR(50),
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS course_version_history (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT,
+    from_version INT,
+    to_version INT,
+    change_summary CLOB,
+    changed_by BIGINT,
+    changed_at TIMESTAMP
+);
+
+ALTER TABLE course ADD COLUMN IF NOT EXISTS version INT DEFAULT 1;

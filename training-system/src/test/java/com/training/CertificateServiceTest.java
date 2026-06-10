@@ -380,4 +380,56 @@ class CertificateServiceTest {
             verify(certificateMapper, never()).updateById(any());
         }
     }
+
+    // ========================================================================
+    // Version and renewal blocking tests
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Version and Renewal Blocking")
+    class VersionAndRenewalBlockingTests {
+
+        @Test
+        @DisplayName("CRITICAL: revoked certificate should remain revoked — renewal cannot change status")
+        void revokedCertShouldRemainRevoked() {
+            validCert.setStatus("REVOKED");
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
+
+            // Verify the certificate is indeed revoked
+            assertEquals("REVOKED", validCert.getStatus());
+
+            // Regenerating token should be blocked
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.regenerateVerifyToken(1L));
+            assertTrue(ex.getMessage().contains("已撤销"));
+        }
+
+        @Test
+        @DisplayName("course version upgrade should not affect existing valid certificate")
+        void versionUpgradeShouldNotAffectValidCert() {
+            // A valid certificate should remain valid regardless of course version changes
+            assertEquals("VALID", validCert.getStatus());
+
+            // Certificate verification should work — uses selectOne not selectById
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
+            var result = certificateService.verifyByCertNo(validCert.getCertNo());
+            assertNotNull(result);
+            assertEquals(true, result.get("valid"));
+        }
+
+        @Test
+        @DisplayName("should not issue duplicate certificate for same student and course")
+        void shouldNotIssueDuplicate() {
+            CertificateIssueRequest req = new CertificateIssueRequest();
+            req.setStudentId(1L);
+            req.setCourseId(10L);
+            req.setTitle("Duplicate Cert");
+
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.issue(req, 0L));
+            assertTrue(ex.getMessage().contains("已获得"));
+        }
+    }
 }

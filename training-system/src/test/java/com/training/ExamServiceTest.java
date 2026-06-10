@@ -5,6 +5,8 @@ import com.training.entity.*;
 import com.training.entity.dto.AnswerSubmitRequest;
 import com.training.entity.dto.ExamStartResponse;
 import com.training.mapper.*;
+import com.training.service.KnowledgePointMasteryService;
+import com.training.service.LearningPathService;
 import com.training.service.impl.ExamServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,6 +42,8 @@ class ExamServiceTest {
     @Mock private GradeMapper gradeMapper;
     @Mock private RedisTemplate<String, Object> redisTemplate;
     @Mock private ValueOperations<String, Object> valueOperations;
+    @Mock private KnowledgePointMasteryService knowledgePointMasteryService;
+    @Mock private LearningPathService learningPathService;
 
     @InjectMocks
     private ExamServiceImpl examService;
@@ -636,6 +640,127 @@ class ExamServiceTest {
 
             verify(answerSheetMapper, times(1)).updateById(any(AnswerSheet.class));
             verify(answerDetailMapper, never()).selectList(any());
+        }
+    }
+
+    // ========================================================================
+    // Concurrent start tests
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Concurrent Start")
+    class ConcurrentStartTests {
+
+        @Test
+        @DisplayName("should resume existing sheet on concurrent start instead of creating duplicate")
+        void shouldResumeExistingSheetOnConcurrentStart() {
+            AnswerSheet existingSheet = AnswerSheet.builder()
+                    .id(100L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").startTime(LocalDateTime.now().minusMinutes(5))
+                    .remainingSeconds(3300).tabSwitchCount(0)
+                    .questionSnapshot(Collections.singletonList(
+                            buildSnapshot(1L, 1L, "Q1", "SINGLE_CHOICE", "A", 10, 1)))
+                    .build();
+
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(0L);
+            when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
+            when(answerDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                    AnswerDetail.builder()
+                            .answerSheetId(100L).questionId(1L).examQuestionId(1L)
+                            .correctAnswer("A").snapshotScore(10).build()));
+            when(redisTemplate.getExpire(anyString(), any(TimeUnit.class))).thenReturn(3300L);
+
+            ExamStartResponse response = examService.startExam(1L, 1L);
+
+            assertTrue(response.getResumed());
+            assertEquals(100L, response.getAnswerSheetId());
+            verify(answerSheetMapper, never()).insert(any());
+        }
+    }
+
+    // ========================================================================
+    // Wrong answer remedial tests
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Wrong Answer Remedial")
+    class WrongAnswerRemedialTests {
+
+        @Test
+        @DisplayName("submitting failed exam should trigger learning path generation")
+        void shouldTriggerRemedialPathOnExamFail() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(100L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").startTime(LocalDateTime.now().minusMinutes(30))
+                    .remainingSeconds(0).tabSwitchCount(0)
+                    .questionSnapshot(Collections.singletonList(
+                            buildSnapshot(1L, 1L, "Q1", "SINGLE_CHOICE", "A", 100, 1)))
+                    .build();
+
+            when(answerSheetMapper.selectById(100L)).thenReturn(sheet);
+            when(redisTemplate.opsForValue().setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                    AnswerDetail.builder()
+                            .id(1L).answerSheetId(100L).questionId(1L).examQuestionId(1L)
+                            .correctAnswer("A").snapshotScore(100)
+                            .studentAnswer("B") // wrong answer
+                            .build()));
+
+            AnswerSubmitRequest req = new AnswerSubmitRequest();
+            req.setAnswerSheetId(100L);
+            AnswerSubmitRequest.AnswerItem wrongAnswer = new AnswerSubmitRequest.AnswerItem();
+            wrongAnswer.setExamQuestionId(1L);
+            wrongAnswer.setQuestionId(1L);
+            wrongAnswer.setAnswer("B");
+            req.setAnswers(Collections.singletonList(wrongAnswer));
+
+            examService.submitExam(req, 1L);
+
+            // Verify mastery update was called
+            verify(knowledgePointMasteryService).updateMasteryFromExam(1L, 10L, 100L);
+            // Verify remedial path was generated (student failed with score 0 < passScore 60)
+            verify(learningPathService).generatePath(1L, 10L, "EXAM_FAIL", null);
+        }
+
+        @Test
+        @DisplayName("should NOT trigger remedial path when exam is passed")
+        void shouldNotTriggerRemedialOnPass() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(100L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").startTime(LocalDateTime.now().minusMinutes(30))
+                    .remainingSeconds(0).tabSwitchCount(0)
+                    .questionSnapshot(Collections.singletonList(
+                            buildSnapshot(1L, 1L, "Q1", "SINGLE_CHOICE", "A", 100, 1)))
+                    .build();
+
+            when(answerSheetMapper.selectById(100L)).thenReturn(sheet);
+            when(redisTemplate.opsForValue().setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                    AnswerDetail.builder()
+                            .id(1L).answerSheetId(100L).questionId(1L).examQuestionId(1L)
+                            .correctAnswer("A").snapshotScore(100)
+                            .studentAnswer("A") // correct answer
+                            .build()));
+
+            AnswerSubmitRequest req2 = new AnswerSubmitRequest();
+            req2.setAnswerSheetId(100L);
+            AnswerSubmitRequest.AnswerItem correctAnswer = new AnswerSubmitRequest.AnswerItem();
+            correctAnswer.setExamQuestionId(1L);
+            correctAnswer.setQuestionId(1L);
+            correctAnswer.setAnswer("A");
+            req2.setAnswers(Collections.singletonList(correctAnswer));
+
+            examService.submitExam(req2, 1L);
+
+            // Mastery update should still be called
+            verify(knowledgePointMasteryService).updateMasteryFromExam(1L, 10L, 100L);
+            // But remedial path should NOT be generated (student passed)
+            verify(learningPathService, never()).generatePath(anyLong(), anyLong(), anyString(), any());
         }
     }
 }
