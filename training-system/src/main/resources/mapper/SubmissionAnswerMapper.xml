@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.SubmissionAnswerMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.SubmissionAnswer">
+        <id column="id" property="id"/>
+        <result column="submission_id" property="submissionId"/>
+        <result column="question_id" property="questionId"/>
+        <result column="question_snapshot" property="questionSnapshot"/>
+        <result column="student_answer" property="studentAnswer"/>
+        <result column="is_correct" property="isCorrect"/>
+        <result column="awarded_score" property="awardedScore"/>
+        <result column="answered_at" property="answeredAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, submission_id, question_id, question_snapshot, student_answer,
+        is_correct, awarded_score, answered_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM submission_answer
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectBySubmissionId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM submission_answer
+        WHERE submission_id = #{submissionId}
+    </select>
+
+    <select id="selectBySubmissionAndQuestion" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM submission_answer
+        WHERE submission_id = #{submissionId} AND question_id = #{questionId}
+    </select>
+
+    <insert id="insert" parameterType="com.training.entity.SubmissionAnswer" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO submission_answer (submission_id, question_id, question_snapshot,
+                                       student_answer, is_correct, awarded_score, answered_at)
+        VALUES (#{submissionId}, #{questionId}, #{questionSnapshot},
+                #{studentAnswer}, #{isCorrect}, #{awardedScore}, #{answeredAt})
+    </insert>
+
+    <insert id="batchInsert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO submission_answer (submission_id, question_id, question_snapshot,
+                                       student_answer, is_correct, awarded_score, answered_at)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.submissionId}, #{item.questionId}, #{item.questionSnapshot},
+             #{item.studentAnswer}, #{item.isCorrect}, #{item.awardedScore}, #{item.answeredAt})
+        </foreach>
+    </insert>
+
+    <update id="updateAnswer">
+        UPDATE submission_answer
+        SET student_answer = #{studentAnswer}, answered_at = #{answeredAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateScore">
+        UPDATE submission_answer
+        SET is_correct = #{isCorrect}, awarded_score = #{awardedScore}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

@@ -1,0 +1,4 @@
+com\training\service\CertificateServiceTest.class
+com\training\service\ExamSubmissionServiceTest.class
+com\training\service\LearningRecordServiceTest.class
+com\training\service\ScoreServiceTest.class

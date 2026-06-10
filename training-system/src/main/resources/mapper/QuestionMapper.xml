@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.QuestionMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.Question">
+        <id column="id" property="id"/>
+        <result column="course_id" property="courseId"/>
+        <result column="content" property="content"/>
+        <result column="question_type" property="questionType"/>
+        <result column="options" property="options"/>
+        <result column="correct_answer" property="correctAnswer"/>
+        <result column="analysis" property="analysis"/>
+        <result column="score" property="score"/>
+        <result column="difficulty" property="difficulty"/>
+        <result column="status" property="status"/>
+        <result column="deleted_at" property="deletedAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, course_id, content, question_type, options, correct_answer, analysis,
+        score, difficulty, status, deleted_at, created_at, updated_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM question
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectList" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM question
+        WHERE status = 'ACTIVE' AND deleted_at IS NULL
+        <if test="courseId != null">
+            AND course_id = #{courseId}
+        </if>
+        <if test="questionType != null and questionType != ''">
+            AND question_type = #{questionType}
+        </if>
+        <if test="difficulty != null and difficulty != ''">
+            AND difficulty = #{difficulty}
+        </if>
+    </select>
+
+    <select id="selectRandomByCourseId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM question
+        WHERE course_id = #{courseId} AND status = 'ACTIVE' AND deleted_at IS NULL
+        ORDER BY RAND()
+        LIMIT #{count}
+    </select>
+
+    <insert id="insert" parameterType="com.training.entity.Question">
+        INSERT INTO question (course_id, content, question_type, options, correct_answer,
+                              analysis, score, difficulty, status, created_at, updated_at)
+        VALUES (#{courseId}, #{content}, #{questionType}, #{options}, #{correctAnswer},
+                #{analysis}, #{score}, #{difficulty}, #{status}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <update id="updateById" parameterType="com.training.entity.Question">
+        UPDATE question
+        <set>
+            <if test="courseId != null">course_id = #{courseId},</if>
+            <if test="content != null">content = #{content},</if>
+            <if test="questionType != null">question_type = #{questionType},</if>
+            <if test="options != null">options = #{options},</if>
+            <if test="correctAnswer != null">correct_answer = #{correctAnswer},</if>
+            <if test="analysis != null">analysis = #{analysis},</if>
+            <if test="score != null">score = #{score},</if>
+            <if test="difficulty != null">difficulty = #{difficulty},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <update id="softDelete">
+        UPDATE question
+        SET status = 'DELETED', deleted_at = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <select id="countByCourseId" resultType="int">
+        SELECT COUNT(*)
+        FROM question
+        WHERE course_id = #{courseId}
+    </select>
+
+</mapper>

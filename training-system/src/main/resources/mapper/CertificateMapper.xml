@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.CertificateMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.Certificate">
+        <id column="id" property="id"/>
+        <result column="cert_no" property="certNo"/>
+        <result column="student_id" property="studentId"/>
+        <result column="course_id" property="courseId"/>
+        <result column="exam_id" property="examId"/>
+        <result column="title" property="title"/>
+        <result column="description" property="description"/>
+        <result column="issued_at" property="issuedAt"/>
+        <result column="expired_at" property="expiredAt"/>
+        <result column="verify_token" property="verifyToken"/>
+        <result column="verify_token_expires_at" property="verifyTokenExpiresAt"/>
+        <result column="status" property="status"/>
+        <result column="file_url" property="fileUrl"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, cert_no, student_id, course_id, exam_id, title, description, issued_at,
+        expired_at, verify_token, verify_token_expires_at, status, file_url, created_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByCertNo" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate
+        WHERE cert_no = #{certNo}
+    </select>
+
+    <select id="selectByVerifyToken" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate
+        WHERE verify_token = #{verifyToken}
+    </select>
+
+    <select id="selectByStudentAndCourse" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate
+        WHERE student_id = #{studentId} AND course_id = #{courseId}
+    </select>
+
+    <select id="selectByStudentId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate
+        WHERE student_id = #{studentId}
+    </select>
+
+    <select id="selectList" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND (cert_no LIKE CONCAT('%', #{keyword}, '%') OR title LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+        </where>
+    </select>
+
+    <insert id="insert" parameterType="com.training.entity.Certificate" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO certificate (cert_no, student_id, course_id, exam_id, title, description,
+                                  issued_at, expired_at, verify_token, verify_token_expires_at,
+                                  status, file_url, created_at)
+        VALUES (#{certNo}, #{studentId}, #{courseId}, #{examId}, #{title}, #{description},
+                #{issuedAt}, #{expiredAt}, #{verifyToken}, #{verifyTokenExpiresAt},
+                #{status}, #{fileUrl}, #{createdAt})
+    </insert>
+
+    <update id="updateById" parameterType="com.training.entity.Certificate">
+        UPDATE certificate
+        <set>
+            <if test="certNo != null">cert_no = #{certNo},</if>
+            <if test="studentId != null">student_id = #{studentId},</if>
+            <if test="courseId != null">course_id = #{courseId},</if>
+            <if test="examId != null">exam_id = #{examId},</if>
+            <if test="title != null">title = #{title},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="issuedAt != null">issued_at = #{issuedAt},</if>
+            <if test="expiredAt != null">expired_at = #{expiredAt},</if>
+            <if test="verifyToken != null">verify_token = #{verifyToken},</if>
+            <if test="verifyTokenExpiresAt != null">verify_token_expires_at = #{verifyTokenExpiresAt},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="fileUrl != null">file_url = #{fileUrl},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE certificate
+        SET status = #{status}
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateVerifyToken">
+        UPDATE certificate
+        SET verify_token = #{verifyToken}, verify_token_expires_at = #{verifyTokenExpiresAt}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.ScoreMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.Score">
+        <id column="id" property="id"/>
+        <result column="student_id" property="studentId"/>
+        <result column="exam_id" property="examId"/>
+        <result column="submission_id" property="submissionId"/>
+        <result column="total_score" property="totalScore"/>
+        <result column="pass_score" property="passScore"/>
+        <result column="is_passed" property="isPassed"/>
+        <result column="status" property="status"/>
+        <result column="reviewed_by" property="reviewedBy"/>
+        <result column="reviewed_at" property="reviewedAt"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, student_id, exam_id, submission_id, total_score, pass_score,
+        is_passed, status, reviewed_by, reviewed_at, created_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM score
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByStudentId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM score
+        WHERE student_id = #{studentId}
+    </select>
+
+    <select id="selectByExamId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM score
+        WHERE exam_id = #{examId}
+    </select>
+
+    <select id="selectBySubmissionId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM score
+        WHERE submission_id = #{submissionId}
+    </select>
+
+    <select id="selectBestByStudentAndExam" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM score
+        WHERE student_id = #{studentId} AND exam_id = #{examId}
+        ORDER BY total_score DESC
+        LIMIT 1
+    </select>
+
+    <insert id="insert" parameterType="com.training.entity.Score" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO score (student_id, exam_id, submission_id, total_score, pass_score,
+                           is_passed, status, reviewed_by, reviewed_at, created_at)
+        VALUES (#{studentId}, #{examId}, #{submissionId}, #{totalScore}, #{passScore},
+                #{isPassed}, #{status}, #{reviewedBy}, #{reviewedAt}, #{createdAt})
+    </insert>
+
+    <update id="updateStatus">
+        UPDATE score
+        SET status = #{status}, reviewed_by = #{reviewedBy}, reviewed_at = #{reviewedAt}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

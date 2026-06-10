@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.CourseMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.Course">
+        <id column="id" property="id"/>
+        <result column="title" property="title"/>
+        <result column="description" property="description"/>
+        <result column="cover_image" property="coverImage"/>
+        <result column="instructor_id" property="instructorId"/>
+        <result column="category" property="category"/>
+        <result column="difficulty" property="difficulty"/>
+        <result column="total_hours" property="totalHours"/>
+        <result column="status" property="status"/>
+        <result column="completion_threshold" property="completionThreshold"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, title, description, cover_image, instructor_id, category, difficulty, total_hours, status, completion_threshold, created_at, updated_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM course WHERE id = #{id}
+    </select>
+
+    <select id="selectList" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM course
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND title LIKE CONCAT('%', #{keyword}, '%')
+            </if>
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+            <if test="instructorId != null">
+                AND instructor_id = #{instructorId}
+            </if>
+        </where>
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO course (title, description, cover_image, instructor_id, category, difficulty, total_hours, status, completion_threshold, created_at, updated_at)
+        VALUES (#{title}, #{description}, #{coverImage}, #{instructorId}, #{category}, #{difficulty}, #{totalHours}, #{status}, #{completionThreshold}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <update id="updateById">
+        UPDATE course
+        <set>
+            <if test="title != null">title = #{title},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="coverImage != null">cover_image = #{coverImage},</if>
+            <if test="instructorId != null">instructor_id = #{instructorId},</if>
+            <if test="category != null">category = #{category},</if>
+            <if test="difficulty != null">difficulty = #{difficulty},</if>
+            <if test="totalHours != null">total_hours = #{totalHours},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="completionThreshold != null">completion_threshold = #{completionThreshold},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM course WHERE id = #{id}
+    </delete>
+
+    <update id="updateStatus">
+        UPDATE course SET status = #{status} WHERE id = #{id}
+    </update>
+
+</mapper>

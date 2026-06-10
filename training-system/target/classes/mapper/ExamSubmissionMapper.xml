@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.ExamSubmissionMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.ExamSubmission">
+        <id column="id" property="id"/>
+        <result column="exam_id" property="examId"/>
+        <result column="student_id" property="studentId"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="submit_time" property="submitTime"/>
+        <result column="status" property="status"/>
+        <result column="total_score" property="totalScore"/>
+        <result column="tab_switch_count" property="tabSwitchCount"/>
+        <result column="attempt_number" property="attemptNumber"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, exam_id, student_id, start_time, end_time, submit_time, status,
+        total_score, tab_switch_count, attempt_number, created_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM exam_submission
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByIdWithAnswers" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM exam_submission
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByExamAndStudent" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM exam_submission
+        WHERE exam_id = #{examId} AND student_id = #{studentId}
+    </select>
+
+    <select id="selectInProgressByExamAndStudent" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM exam_submission
+        WHERE exam_id = #{examId} AND student_id = #{studentId} AND status = 'IN_PROGRESS'
+    </select>
+
+    <select id="countByExamAndStudent" resultType="int">
+        SELECT COUNT(*)
+        FROM exam_submission
+        WHERE exam_id = #{examId} AND student_id = #{studentId}
+    </select>
+
+    <select id="selectByStatus" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM exam_submission
+        WHERE status = #{status}
+    </select>
+
+    <insert id="insert" parameterType="com.training.entity.ExamSubmission" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO exam_submission (exam_id, student_id, start_time, end_time, submit_time,
+                                     status, total_score, tab_switch_count, attempt_number, created_at)
+        VALUES (#{examId}, #{studentId}, #{startTime}, #{endTime}, #{submitTime},
+                #{status}, #{totalScore}, #{tabSwitchCount}, #{attemptNumber}, #{createdAt})
+    </insert>
+
+    <update id="updateById" parameterType="com.training.entity.ExamSubmission">
+        UPDATE exam_submission
+        <set>
+            <if test="examId != null">exam_id = #{examId},</if>
+            <if test="studentId != null">student_id = #{studentId},</if>
+            <if test="startTime != null">start_time = #{startTime},</if>
+            <if test="endTime != null">end_time = #{endTime},</if>
+            <if test="submitTime != null">submit_time = #{submitTime},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="totalScore != null">total_score = #{totalScore},</if>
+            <if test="tabSwitchCount != null">tab_switch_count = #{tabSwitchCount},</if>
+            <if test="attemptNumber != null">attempt_number = #{attemptNumber},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE exam_submission
+        SET status = #{status}, submit_time = #{submitTime}, total_score = #{totalScore}
+        WHERE id = #{id}
+    </update>
+
+</mapper>

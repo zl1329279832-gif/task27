@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.ClazzMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.Clazz">
+        <id column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="course_id" property="courseId"/>
+        <result column="instructor_id" property="instructorId"/>
+        <result column="description" property="description"/>
+        <result column="start_date" property="startDate"/>
+        <result column="end_date" property="endDate"/>
+        <result column="max_students" property="maxStudents"/>
+        <result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, name, course_id, instructor_id, description, start_date, end_date, max_students, status, created_at, updated_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM clazz WHERE id = #{id}
+    </select>
+
+    <select id="selectList" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM clazz
+        <where>
+            <if test="keyword != null and keyword != ''">
+                AND name LIKE CONCAT('%', #{keyword}, '%')
+            </if>
+            <if test="status != null and status != ''">
+                AND status = #{status}
+            </if>
+            <if test="courseId != null">
+                AND course_id = #{courseId}
+            </if>
+        </where>
+    </select>
+
+    <insert id="insert">
+        INSERT INTO clazz (name, course_id, instructor_id, description, start_date, end_date, max_students, status, created_at, updated_at)
+        VALUES (#{name}, #{courseId}, #{instructorId}, #{description}, #{startDate}, #{endDate}, #{maxStudents}, #{status}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <update id="updateById">
+        UPDATE clazz
+        <set>
+            <if test="name != null">name = #{name},</if>
+            <if test="courseId != null">course_id = #{courseId},</if>
+            <if test="instructorId != null">instructor_id = #{instructorId},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="startDate != null">start_date = #{startDate},</if>
+            <if test="endDate != null">end_date = #{endDate},</if>
+            <if test="maxStudents != null">max_students = #{maxStudents},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM clazz WHERE id = #{id}
+    </delete>
+
+    <update id="updateStatus">
+        UPDATE clazz SET status = #{status} WHERE id = #{id}
+    </update>
+
+</mapper>

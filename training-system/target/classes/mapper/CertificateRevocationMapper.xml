@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.CertificateRevocationMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.CertificateRevocation">
+        <id column="id" property="id"/>
+        <result column="certificate_id" property="certificateId"/>
+        <result column="reason" property="reason"/>
+        <result column="revoked_by" property="revokedBy"/>
+        <result column="revoked_at" property="revokedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, certificate_id, reason, revoked_by, revoked_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate_revocation
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByCertificateId" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate_revocation
+        WHERE certificate_id = #{certificateId}
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM certificate_revocation
+    </select>
+
+    <insert id="insert" parameterType="com.training.entity.CertificateRevocation" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO certificate_revocation (certificate_id, reason, revoked_by, revoked_at)
+        VALUES (#{certificateId}, #{reason}, #{revokedBy}, #{revokedAt})
+    </insert>
+
+</mapper>

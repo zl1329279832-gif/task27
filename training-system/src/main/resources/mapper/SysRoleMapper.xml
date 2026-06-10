@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.SysRoleMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.SysRole">
+        <id column="id" property="id"/>
+        <result column="role_name" property="roleName"/>
+        <result column="role_code" property="roleCode"/>
+        <result column="description" property="description"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, role_name, role_code, description, created_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM sys_role WHERE id = #{id}
+    </select>
+
+    <select id="selectByRoleCode" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM sys_role WHERE role_code = #{roleCode}
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM sys_role
+    </select>
+
+    <insert id="insert">
+        INSERT INTO sys_role (role_name, role_code, description, created_at)
+        VALUES (#{roleName}, #{roleCode}, #{description}, #{createdAt})
+    </insert>
+
+</mapper>

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.CoursewareMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.Courseware">
+        <id column="id" property="id"/>
+        <result column="chapter_id" property="chapterId"/>
+        <result column="title" property="title"/>
+        <result column="file_type" property="fileType"/>
+        <result column="file_url" property="fileUrl"/>
+        <result column="file_size" property="fileSize"/>
+        <result column="duration" property="duration"/>
+        <result column="sort_order" property="sortOrder"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, chapter_id, title, file_type, file_url, file_size, duration, sort_order, created_at, updated_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM courseware WHERE id = #{id}
+    </select>
+
+    <select id="selectByChapterId" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM courseware WHERE chapter_id = #{chapterId} ORDER BY sort_order ASC
+    </select>
+
+    <select id="selectByCourseId" resultMap="BaseResultMap">
+        SELECT cw.id, cw.chapter_id, cw.title, cw.file_type, cw.file_url, cw.file_size, cw.duration, cw.sort_order, cw.created_at, cw.updated_at
+        FROM courseware cw
+        JOIN chapter ch ON cw.chapter_id = ch.id
+        WHERE ch.course_id = #{courseId}
+    </select>
+
+    <insert id="insert">
+        INSERT INTO courseware (chapter_id, title, file_type, file_url, file_size, duration, sort_order, created_at, updated_at)
+        VALUES (#{chapterId}, #{title}, #{fileType}, #{fileUrl}, #{fileSize}, #{duration}, #{sortOrder}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <update id="updateById">
+        UPDATE courseware
+        <set>
+            <if test="chapterId != null">chapter_id = #{chapterId},</if>
+            <if test="title != null">title = #{title},</if>
+            <if test="fileType != null">file_type = #{fileType},</if>
+            <if test="fileUrl != null">file_url = #{fileUrl},</if>
+            <if test="fileSize != null">file_size = #{fileSize},</if>
+            <if test="duration != null">duration = #{duration},</if>
+            <if test="sortOrder != null">sort_order = #{sortOrder},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM courseware WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteByChapterId">
+        DELETE FROM courseware WHERE chapter_id = #{chapterId}
+    </delete>
+
+    <select id="countByCourseId" resultType="int">
+        SELECT COUNT(*) FROM courseware cw
+        JOIN chapter ch ON cw.chapter_id = ch.id
+        WHERE ch.course_id = #{courseId}
+    </select>
+
+</mapper>

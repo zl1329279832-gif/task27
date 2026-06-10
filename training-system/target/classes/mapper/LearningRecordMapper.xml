@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.LearningRecordMapper">
+
+    <resultMap id="BaseResultMap" type="com.training.entity.LearningRecord">
+        <id column="id" property="id"/>
+        <result column="student_id" property="studentId"/>
+        <result column="courseware_id" property="coursewareId"/>
+        <result column="chapter_id" property="chapterId"/>
+        <result column="course_id" property="courseId"/>
+        <result column="status" property="status"/>
+        <result column="progress" property="progress"/>
+        <result column="last_position" property="lastPosition"/>
+        <result column="study_duration" property="studyDuration"/>
+        <result column="started_at" property="startedAt"/>
+        <result column="completed_at" property="completedAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, student_id, courseware_id, chapter_id, course_id, status, progress, last_position, study_duration, started_at, completed_at, updated_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM learning_record WHERE id = #{id}
+    </select>
+
+    <select id="selectByStudentAndCourseware" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM learning_record
+        WHERE student_id = #{studentId} AND courseware_id = #{coursewareId}
+    </select>
+
+    <select id="selectByStudentAndCourse" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/> FROM learning_record
+        WHERE student_id = #{studentId} AND course_id = #{courseId}
+    </select>
+
+    <insert id="insert">
+        INSERT INTO learning_record (student_id, courseware_id, chapter_id, course_id, status, progress, last_position, study_duration, started_at, completed_at, updated_at)
+        VALUES (#{studentId}, #{coursewareId}, #{chapterId}, #{courseId}, #{status}, #{progress}, #{lastPosition}, #{studyDuration}, #{startedAt}, #{completedAt}, #{updatedAt})
+    </insert>
+
+    <update id="updateById">
+        UPDATE learning_record
+        <set>
+            <if test="studentId != null">student_id = #{studentId},</if>
+            <if test="coursewareId != null">courseware_id = #{coursewareId},</if>
+            <if test="chapterId != null">chapter_id = #{chapterId},</if>
+            <if test="courseId != null">course_id = #{courseId},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="progress != null">progress = #{progress},</if>
+            <if test="lastPosition != null">last_position = #{lastPosition},</if>
+            <if test="studyDuration != null">study_duration = #{studyDuration},</if>
+            <if test="startedAt != null">started_at = #{startedAt},</if>
+            <if test="completedAt != null">completed_at = #{completedAt},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <select id="countCompletedByStudentAndCourse" resultType="int">
+        SELECT COUNT(*) FROM learning_record
+        WHERE student_id = #{studentId} AND course_id = #{courseId} AND status = 'COMPLETED'
+    </select>
+
+</mapper>
