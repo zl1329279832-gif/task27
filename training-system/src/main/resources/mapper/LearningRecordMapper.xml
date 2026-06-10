@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.LearningRecordMapper">
+
+    <!--
+        Get course progress summary for a student in a specific course.
+        Returns total chapters, completed chapters, and overall progress percentage.
+    -->
+    <select id="selectCourseProgressSummary" resultType="java.util.Map">
+        SELECT
+            COUNT(DISTINCT ch.id) AS totalChapters,
+            COUNT(DISTINCT CASE WHEN lr.status = 'COMPLETED' THEN ch.id END) AS completedChapters,
+            ROUND(
+                CASE
+                    WHEN COUNT(DISTINCT ch.id) = 0 THEN 0
+                    ELSE COUNT(DISTINCT CASE WHEN lr.status = 'COMPLETED' THEN ch.id END) * 100.0
+                         / COUNT(DISTINCT ch.id)
+                END, 1
+            ) AS overallProgressPercent
+        FROM chapter ch
+        LEFT JOIN courseware cw ON ch.id = cw.chapter_id
+        LEFT JOIN learning_record lr ON cw.id = lr.courseware_id
+            AND lr.student_id = #{studentId}
+        WHERE ch.course_id = #{courseId}
+    </select>
+
+</mapper>

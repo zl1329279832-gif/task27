@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.training.mapper.AnswerSheetMapper">
+
+    <!--
+        Get answer sheet details including answer details and questions.
+        Uses LEFT JOIN on question so that deleted questions still appear in results.
+    -->
+    <resultMap id="AnswerSheetDetailResultMap" type="com.training.entity.AnswerSheet">
+        <id column="id" property="id"/>
+        <result column="exam_id" property="examId"/>
+        <result column="student_id" property="studentId"/>
+        <result column="attempt_no" property="attemptNo"/>
+        <result column="status" property="status"/>
+        <result column="start_time" property="startTime"/>
+        <result column="submit_time" property="submitTime"/>
+        <result column="remaining_seconds" property="remainingSeconds"/>
+        <result column="tab_switch_count" property="tabSwitchCount"/>
+        <result column="score" property="score"/>
+        <result column="pass" property="pass"/>
+        <result column="grading_completed_at" property="gradingCompletedAt"/>
+        <result column="created_at" property="createdAt"/>
+        <collection property="answerDetails" ofType="com.training.entity.AnswerDetail">
+            <id column="ad_id" property="id"/>
+            <result column="ad_answer_sheet_id" property="answerSheetId"/>
+            <result column="ad_question_id" property="questionId"/>
+            <result column="ad_exam_question_id" property="examQuestionId"/>
+            <result column="ad_student_answer" property="studentAnswer"/>
+            <result column="ad_is_correct" property="isCorrect"/>
+            <result column="ad_score_earned" property="scoreEarned"/>
+            <result column="ad_grading_note" property="gradingNote"/>
+        </collection>
+    </resultMap>
+
+    <select id="selectAnswerSheetWithDetails" resultMap="AnswerSheetDetailResultMap">
+        SELECT
+            a.id,
+            a.exam_id,
+            a.student_id,
+            a.attempt_no,
+            a.status,
+            a.start_time,
+            a.submit_time,
+            a.remaining_seconds,
+            a.tab_switch_count,
+            a.score,
+            a.pass,
+            a.grading_completed_at,
+            a.created_at,
+            ad.id AS ad_id,
+            ad.answer_sheet_id AS ad_answer_sheet_id,
+            ad.question_id AS ad_question_id,
+            ad.exam_question_id AS ad_exam_question_id,
+            ad.student_answer AS ad_student_answer,
+            ad.is_correct AS ad_is_correct,
+            ad.score_earned AS ad_score_earned,
+            ad.grading_note AS ad_grading_note
+        FROM answer_sheet a
+        LEFT JOIN answer_detail ad ON a.id = ad.answer_sheet_id
+        LEFT JOIN question q ON ad.question_id = q.id
+        WHERE a.id = #{answerSheetId}
+        ORDER BY ad.id
+    </select>
+
+</mapper>
