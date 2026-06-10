@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS answer_sheet (
     score DECIMAL(10,2),
     pass INT,
     grading_completed_at TIMESTAMP,
+    question_snapshot CLOB,
     created_at TIMESTAMP
 );
 
@@ -104,6 +105,8 @@ CREATE TABLE IF NOT EXISTS answer_detail (
     question_id BIGINT,
     exam_question_id BIGINT,
     student_answer VARCHAR(1000),
+    correct_answer VARCHAR(500),
+    snapshot_score INT,
     is_correct INT,
     score_earned DECIMAL(10,2),
     grading_note VARCHAR(500)

@@ -9,6 +9,7 @@ import com.training.entity.dto.*;
 import com.training.mapper.*;
 import com.training.service.ExamService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ExamServiceImpl implements ExamService {
@@ -32,9 +34,6 @@ public class ExamServiceImpl implements ExamService {
 
     @Override
     public Exam create(ExamRequest req, Long instructorId) {
-        Course course = new Course();
-        // Validate course exists (simplified)
-
         Exam exam = Exam.builder()
                 .courseId(req.getCourseId())
                 .title(req.getTitle())
@@ -186,7 +185,7 @@ public class ExamServiceImpl implements ExamService {
                         .eq(AnswerSheet::getStatus, "IN_PROGRESS"));
 
         if (existingSheet != null) {
-            // Resume exam - breakpoint continuation
+            // Resume exam - use frozen snapshot, NOT live question data
             return buildResumeResponse(existingSheet, exam);
         }
 
@@ -209,7 +208,7 @@ public class ExamServiceImpl implements ExamService {
         String timeoutKey = "exam:timeout:" + sheet.getId();
         redisTemplate.opsForValue().set(timeoutKey, "1", remainingSeconds, TimeUnit.SECONDS);
 
-        // Build question list
+        // Build question list and freeze snapshot
         List<ExamQuestion> examQuestions = examQuestionMapper.selectList(
                 new LambdaQueryWrapper<ExamQuestion>()
                         .eq(ExamQuestion::getExamId, examId)
@@ -222,10 +221,27 @@ public class ExamServiceImpl implements ExamService {
             examQuestions = examQuestions.subList(0, exam.getQuestionCount());
         }
 
+        List<AnswerSheet.QuestionSnapshot> snapshots = new ArrayList<>();
         List<ExamStartResponse.QuestionItem> questionItems = new ArrayList<>();
+
         for (ExamQuestion eq : examQuestions) {
             Question q = questionMapper.selectById(eq.getQuestionId());
             if (q == null || "DELETED".equals(q.getStatus())) continue;
+
+            int qScore = eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore();
+
+            // Freeze question data into snapshot
+            AnswerSheet.QuestionSnapshot snapshot = AnswerSheet.QuestionSnapshot.builder()
+                    .questionId(q.getId())
+                    .examQuestionId(eq.getId())
+                    .content(q.getContent())
+                    .questionType(q.getQuestionType())
+                    .options(q.getOptions())
+                    .correctAnswer(q.getCorrectAnswer())
+                    .score(qScore)
+                    .sortOrder(eq.getSortOrder())
+                    .build();
+            snapshots.add(snapshot);
 
             questionItems.add(ExamStartResponse.QuestionItem.builder()
                     .examQuestionId(eq.getId())
@@ -233,18 +249,24 @@ public class ExamServiceImpl implements ExamService {
                     .content(q.getContent())
                     .questionType(q.getQuestionType())
                     .options(q.getOptions())
-                    .score(eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore())
+                    .score(qScore)
                     .sortOrder(eq.getSortOrder())
                     .build());
 
-            // Create answer detail placeholder
+            // Create answer detail with frozen correctAnswer and score
             AnswerDetail detail = AnswerDetail.builder()
                     .answerSheetId(sheet.getId())
                     .questionId(q.getId())
                     .examQuestionId(eq.getId())
+                    .correctAnswer(q.getCorrectAnswer())
+                    .snapshotScore(qScore)
                     .build();
             answerDetailMapper.insert(detail);
         }
+
+        // Persist the frozen snapshot on the answer sheet
+        sheet.setQuestionSnapshot(snapshots);
+        answerSheetMapper.updateById(sheet);
 
         return ExamStartResponse.builder()
                 .answerSheetId(sheet.getId())
@@ -257,37 +279,51 @@ public class ExamServiceImpl implements ExamService {
                 .build();
     }
 
+    /**
+     * Build resume response from the frozen snapshot stored on the answer sheet.
+     * NEVER reads from the live question table — this prevents question bank changes
+     * from affecting students who are resuming an exam after a disconnection.
+     */
     private ExamStartResponse buildResumeResponse(AnswerSheet sheet, Exam exam) {
         // Get existing answers
         List<AnswerDetail> details = answerDetailMapper.selectList(
                 new LambdaQueryWrapper<AnswerDetail>()
                         .eq(AnswerDetail::getAnswerSheetId, sheet.getId()));
 
+        // Build a lookup map from snapshot (frozen data)
+        Map<Long, AnswerSheet.QuestionSnapshot> snapshotMap = new HashMap<>();
+        if (sheet.getQuestionSnapshot() != null) {
+            for (AnswerSheet.QuestionSnapshot snap : sheet.getQuestionSnapshot()) {
+                snapshotMap.put(snap.getQuestionId(), snap);
+            }
+        }
+
         List<ExamStartResponse.QuestionItem> questionItems = new ArrayList<>();
         List<ExamStartResponse.AnswerItem> answerItems = new ArrayList<>();
 
         for (AnswerDetail detail : details) {
-            Question q = questionMapper.selectById(detail.getQuestionId());
-            if (q == null) continue;
-
-            ExamQuestion eq = null;
-            if (detail.getExamQuestionId() != null) {
-                eq = examQuestionMapper.selectById(detail.getExamQuestionId());
+            // Use snapshot data, NOT live question data
+            AnswerSheet.QuestionSnapshot snap = snapshotMap.get(detail.getQuestionId());
+            if (snap == null) {
+                // Fallback: if somehow no snapshot exists (legacy data), skip
+                log.warn("No snapshot found for questionId={} in answerSheet={}, skipping",
+                        detail.getQuestionId(), sheet.getId());
+                continue;
             }
 
             questionItems.add(ExamStartResponse.QuestionItem.builder()
-                    .examQuestionId(detail.getExamQuestionId())
-                    .questionId(q.getId())
-                    .content(q.getContent())
-                    .questionType(q.getQuestionType())
-                    .options(q.getOptions())
-                    .score(eq != null && eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore())
-                    .sortOrder(eq != null ? eq.getSortOrder() : 0)
+                    .examQuestionId(snap.getExamQuestionId())
+                    .questionId(snap.getQuestionId())
+                    .content(snap.getContent())
+                    .questionType(snap.getQuestionType())
+                    .options(snap.getOptions())
+                    .score(snap.getScore())
+                    .sortOrder(snap.getSortOrder())
                     .build());
 
             if (detail.getStudentAnswer() != null) {
                 answerItems.add(ExamStartResponse.AnswerItem.builder()
-                        .examQuestionId(detail.getExamQuestionId())
+                        .examQuestionId(snap.getExamQuestionId())
                         .questionId(detail.getQuestionId())
                         .studentAnswer(detail.getStudentAnswer())
                         .build());
@@ -300,6 +336,13 @@ public class ExamServiceImpl implements ExamService {
         Long redisTTL = redisTemplate.getExpire(timeoutKey, TimeUnit.SECONDS);
         if (redisTTL != null && redisTTL > 0) {
             remaining = redisTTL.intValue();
+        } else if (redisTTL != null && redisTTL <= 0) {
+            // Redis key expired — compute from DB startTime + durationMinutes
+            if (sheet.getStartTime() != null) {
+                long elapsed = java.time.Duration.between(sheet.getStartTime(), LocalDateTime.now()).getSeconds();
+                long totalAllowed = (long) exam.getDurationMinutes() * 60;
+                remaining = (int) Math.max(0, totalAllowed - elapsed);
+            }
         }
 
         return ExamStartResponse.builder()
@@ -322,89 +365,117 @@ public class ExamServiceImpl implements ExamService {
         if (!"IN_PROGRESS".equals(sheet.getStatus()))
             throw new BusinessException("答卷已提交或已超时，不能重复提交");
 
-        // Idempotent check via Redis
+        // Idempotent check via Redis — clean up on failure so student can retry
         String idempotentKey = "submit:" + sheet.getExamId() + ":" + studentId + ":" + sheet.getAttemptNo();
         Boolean isFirst = redisTemplate.opsForValue().setIfAbsent(idempotentKey, "1", 30, TimeUnit.SECONDS);
         if (isFirst != null && !isFirst) {
             throw new BusinessException("请勿重复提交答卷");
         }
 
-        Exam exam = examMapper.selectById(sheet.getExamId());
+        Exam exam;
+        try {
+            exam = examMapper.selectById(sheet.getExamId());
 
-        // Save answers
-        if (req.getAnswers() != null) {
-            for (AnswerSubmitRequest.AnswerItem answerItem : req.getAnswers()) {
-                LambdaQueryWrapper<AnswerDetail> wrapper = new LambdaQueryWrapper<AnswerDetail>()
-                        .eq(AnswerDetail::getAnswerSheetId, sheet.getId())
-                        .eq(AnswerDetail::getQuestionId, answerItem.getQuestionId());
-                if (answerItem.getExamQuestionId() != null) {
-                    wrapper.eq(AnswerDetail::getExamQuestionId, answerItem.getExamQuestionId());
-                }
-                AnswerDetail detail = answerDetailMapper.selectOne(wrapper);
-                if (detail != null) {
-                    detail.setStudentAnswer(answerItem.getAnswer());
-                    answerDetailMapper.updateById(detail);
+            // Save answers
+            if (req.getAnswers() != null) {
+                for (AnswerSubmitRequest.AnswerItem answerItem : req.getAnswers()) {
+                    LambdaQueryWrapper<AnswerDetail> wrapper = new LambdaQueryWrapper<AnswerDetail>()
+                            .eq(AnswerDetail::getAnswerSheetId, sheet.getId())
+                            .eq(AnswerDetail::getQuestionId, answerItem.getQuestionId());
+                    if (answerItem.getExamQuestionId() != null) {
+                        wrapper.eq(AnswerDetail::getExamQuestionId, answerItem.getExamQuestionId());
+                    }
+                    AnswerDetail detail = answerDetailMapper.selectOne(wrapper);
+                    if (detail != null) {
+                        detail.setStudentAnswer(answerItem.getAnswer());
+                        answerDetailMapper.updateById(detail);
+                    }
                 }
             }
-        }
 
-        // Auto-grade
-        return autoGrade(sheet, exam, "SUBMITTED");
+            // Auto-grade using frozen snapshot data
+            return autoGrade(sheet, exam, "SUBMITTED");
+        } catch (Exception e) {
+            // On grading failure, remove idempotent key so student can retry
+            redisTemplate.delete(idempotentKey);
+            throw e;
+        }
     }
 
+    /**
+     * Auto-grade using frozen data from AnswerDetail (correctAnswer, snapshotScore).
+     * Does NOT read from the live question table to ensure grading consistency
+     * even if the question bank has been modified since the exam started.
+     */
     private AnswerSheet autoGrade(AnswerSheet sheet, Exam exam, String submitStatus) {
         List<AnswerDetail> details = answerDetailMapper.selectList(
                 new LambdaQueryWrapper<AnswerDetail>()
                         .eq(AnswerDetail::getAnswerSheetId, sheet.getId()));
 
+        // Build snapshot lookup for fallback on legacy data
+        Map<Long, AnswerSheet.QuestionSnapshot> snapshotMap = new HashMap<>();
+        if (sheet.getQuestionSnapshot() != null) {
+            for (AnswerSheet.QuestionSnapshot snap : sheet.getQuestionSnapshot()) {
+                snapshotMap.put(snap.getQuestionId(), snap);
+            }
+        }
+
         double totalScore = 0;
         boolean allGraded = true;
 
         for (AnswerDetail detail : details) {
-            Question question = questionMapper.selectById(detail.getQuestionId());
-            if (question == null || "DELETED".equals(question.getStatus())) {
-                // Deleted question - give full score
-                ExamQuestion eq = detail.getExamQuestionId() != null ?
-                        examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-                int qScore = (eq != null && eq.getScoreOverride() != null) ?
-                        eq.getScoreOverride() : (question != null ? question.getScore() : 10);
-                detail.setIsCorrect(1);
-                detail.setScoreEarned((double) qScore);
-                detail.setGradingNote("题目已删除，自动给满分");
-                answerDetailMapper.updateById(detail);
-                totalScore += qScore;
-                continue;
+            // Use frozen data from AnswerDetail first, then snapshot fallback
+            String correctAns = detail.getCorrectAnswer();
+            int qScore = detail.getSnapshotScore() != null ? detail.getSnapshotScore() : 0;
+            String questionType = null;
+
+            AnswerSheet.QuestionSnapshot snap = snapshotMap.get(detail.getQuestionId());
+            if (snap != null) {
+                if (correctAns == null) correctAns = snap.getCorrectAnswer();
+                if (detail.getSnapshotScore() == null) qScore = snap.getScore();
+                questionType = snap.getQuestionType();
             }
 
-            ExamQuestion eq = detail.getExamQuestionId() != null ?
-                    examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-            int qScore = (eq != null && eq.getScoreOverride() != null) ?
-                    eq.getScoreOverride() : question.getScore();
+            // If no snapshot data at all (legacy), fall back to live question table
+            if (questionType == null) {
+                Question question = questionMapper.selectById(detail.getQuestionId());
+                if (question == null || "DELETED".equals(question.getStatus())) {
+                    // Deleted question with no snapshot — give full score
+                    if (qScore == 0) qScore = 10;
+                    detail.setIsCorrect(1);
+                    detail.setScoreEarned((double) qScore);
+                    detail.setGradingNote("题目已删除，自动给满分");
+                    answerDetailMapper.updateById(detail);
+                    totalScore += qScore;
+                    continue;
+                }
+                questionType = question.getQuestionType();
+                if (correctAns == null) correctAns = question.getCorrectAnswer();
+                if (qScore == 0) qScore = question.getScore();
+            }
 
-            String questionType = question.getQuestionType();
             if ("SHORT_ANSWER".equals(questionType)) {
-                // Subjective - needs manual grading
+                // Subjective — needs manual grading
                 detail.setGradingNote("待人工批改");
                 answerDetailMapper.updateById(detail);
                 allGraded = false;
                 continue;
             }
 
-            // Auto-grade objective questions
+            // Auto-grade objective questions using frozen correctAnswer
             boolean isCorrect = false;
-            if (detail.getStudentAnswer() != null) {
+            if (detail.getStudentAnswer() != null && correctAns != null) {
                 String studentAns = detail.getStudentAnswer().trim();
-                String correctAns = question.getCorrectAnswer().trim();
+                String frozenCorrectAns = correctAns.trim();
 
                 if ("MULTI_CHOICE".equals(questionType)) {
-                    // Sort and compare for multi-choice
                     String[] sArr = studentAns.split("[,，、]");
-                    String[] cArr = correctAns.split("[,，、]");
+                    String[] cArr = frozenCorrectAns.split("[,，、]");
                     Arrays.sort(sArr);
                     Arrays.sort(cArr);
                     isCorrect = Arrays.equals(sArr, cArr);
                 } else {
-                    isCorrect = studentAns.equalsIgnoreCase(correctAns);
+                    isCorrect = studentAns.equalsIgnoreCase(frozenCorrectAns);
                 }
             }
 

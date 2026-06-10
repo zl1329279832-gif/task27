@@ -179,6 +179,16 @@ public class CertificateServiceImpl implements CertificateService {
             return result;
         }
 
+        // Check revocation FIRST — a revoked cert must always show as revoked,
+        // even if the verify token has expired
+        if ("REVOKED".equals(cert.getStatus())) {
+            result.put("valid", false);
+            result.put("message", "该证书已撤销");
+            result.put("revokeReason", cert.getRevokeReason());
+            result.put("revokedAt", cert.getRevokedAt());
+            return result;
+        }
+
         // Check token expiration
         if (cert.getVerifyTokenExpiresAt() != null
                 && LocalDateTime.now().isAfter(cert.getVerifyTokenExpiresAt())) {
@@ -235,6 +245,7 @@ public class CertificateServiceImpl implements CertificateService {
     public String regenerateVerifyToken(Long id) {
         Certificate cert = certificateMapper.selectById(id);
         if (cert == null) throw new BusinessException("证书不存在");
+        if ("REVOKED".equals(cert.getStatus())) throw new BusinessException("已撤销的证书不能重新生成验证链接");
 
         String newToken = UUID.randomUUID().toString().replace("-", "");
         cert.setVerifyToken(newToken);

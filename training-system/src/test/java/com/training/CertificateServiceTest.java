@@ -10,6 +10,7 @@ import com.training.service.impl.CertificateServiceImpl;
 import com.training.util.CertNoGenerator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -46,7 +47,6 @@ class CertificateServiceTest {
 
     @BeforeEach
     void setUp() {
-        // Set @Value field that @InjectMocks cannot inject
         ReflectionTestUtils.setField(certificateService, "verifyTokenExpirationDays", 7);
 
         validCert = Certificate.builder()
@@ -66,229 +66,318 @@ class CertificateServiceTest {
     // issue tests
     // ========================================================================
 
-    @Test
-    @DisplayName("issue: should create certificate when completion is 100% and exam is passed")
-    void issue_shouldSucceedWhenAllConditionsMet() {
-        CertificateIssueRequest req = new CertificateIssueRequest();
-        req.setStudentId(1L);
-        req.setCourseId(10L);
-        req.setTitle("Java Advanced Certificate");
+    @Nested
+    @DisplayName("issue")
+    class IssueTests {
 
-        when(certificateMapper.selectOne(any())).thenReturn(null); // no existing cert
-        when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(100.0);
+        @Test
+        @DisplayName("should create certificate when completion is 100% and exam is passed")
+        void shouldSucceedWhenAllConditionsMet() {
+            CertificateIssueRequest req = new CertificateIssueRequest();
+            req.setStudentId(1L);
+            req.setCourseId(10L);
+            req.setTitle("Java Advanced Certificate");
 
-        Grade passingGrade = Grade.builder().id(1L).studentId(1L).courseId(10L).pass(1).build();
-        when(gradeMapper.selectList(any())).thenReturn(List.of(passingGrade));
-        when(certNoGenerator.generate(10L)).thenReturn("CERT-10-20260610-0001");
+            when(certificateMapper.selectOne(any())).thenReturn(null);
+            when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(100.0);
 
-        Certificate result = certificateService.issue(req, 1L);
+            Grade passingGrade = Grade.builder().id(1L).studentId(1L).courseId(10L).pass(1).build();
+            when(gradeMapper.selectList(any())).thenReturn(List.of(passingGrade));
+            when(certNoGenerator.generate(10L)).thenReturn("CERT-10-20260610-0001");
 
-        assertNotNull(result);
-        assertEquals("VALID", result.getStatus());
-        assertEquals("CERT-10-20260610-0001", result.getCertNo());
-        assertEquals("Java Advanced Certificate", result.getTitle());
-        assertNotNull(result.getVerifyToken());
-        assertNotNull(result.getVerifyTokenExpiresAt());
+            Certificate result = certificateService.issue(req, 1L);
 
-        ArgumentCaptor<Certificate> captor = ArgumentCaptor.forClass(Certificate.class);
-        verify(certificateMapper).insert(captor.capture());
-        assertEquals(1L, captor.getValue().getStudentId());
-        assertEquals(10L, captor.getValue().getCourseId());
-    }
+            assertNotNull(result);
+            assertEquals("VALID", result.getStatus());
+            assertEquals("CERT-10-20260610-0001", result.getCertNo());
+            assertEquals("Java Advanced Certificate", result.getTitle());
+            assertNotNull(result.getVerifyToken());
+            assertNotNull(result.getVerifyTokenExpiresAt());
 
-    @Test
-    @DisplayName("issue: should throw BusinessException when completion rate is below 100%")
-    void issue_shouldThrowWhenCompletionRateInsufficient() {
-        CertificateIssueRequest req = new CertificateIssueRequest();
-        req.setStudentId(1L);
-        req.setCourseId(10L);
+            ArgumentCaptor<Certificate> captor = ArgumentCaptor.forClass(Certificate.class);
+            verify(certificateMapper).insert(captor.capture());
+            assertEquals(1L, captor.getValue().getStudentId());
+            assertEquals(10L, captor.getValue().getCourseId());
+        }
 
-        when(certificateMapper.selectOne(any())).thenReturn(null);
-        when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(75.5);
+        @Test
+        @DisplayName("should throw when completion rate is below 100%")
+        void shouldThrowWhenCompletionRateInsufficient() {
+            CertificateIssueRequest req = new CertificateIssueRequest();
+            req.setStudentId(1L);
+            req.setCourseId(10L);
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> certificateService.issue(req, 1L));
-        assertTrue(ex.getMessage().contains("完成率不足"));
-        assertTrue(ex.getMessage().contains("75.5"));
+            when(certificateMapper.selectOne(any())).thenReturn(null);
+            when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(75.5);
 
-        verify(certificateMapper, never()).insert(any());
-    }
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.issue(req, 1L));
+            assertTrue(ex.getMessage().contains("完成率不足"));
+            assertTrue(ex.getMessage().contains("75.5"));
 
-    @Test
-    @DisplayName("issue: should throw BusinessException when exam has not been passed")
-    void issue_shouldThrowWhenExamNotPassed() {
-        CertificateIssueRequest req = new CertificateIssueRequest();
-        req.setStudentId(1L);
-        req.setCourseId(10L);
+            verify(certificateMapper, never()).insert(any());
+        }
 
-        when(certificateMapper.selectOne(any())).thenReturn(null);
-        when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(100.0);
-        when(gradeMapper.selectList(any())).thenReturn(Collections.emptyList()); // no passing grades
+        @Test
+        @DisplayName("should throw when exam has not been passed")
+        void shouldThrowWhenExamNotPassed() {
+            CertificateIssueRequest req = new CertificateIssueRequest();
+            req.setStudentId(1L);
+            req.setCourseId(10L);
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> certificateService.issue(req, 1L));
-        assertTrue(ex.getMessage().contains("未通过"));
+            when(certificateMapper.selectOne(any())).thenReturn(null);
+            when(learningRecordService.getCompletionRate(1L, 10L)).thenReturn(100.0);
+            when(gradeMapper.selectList(any())).thenReturn(Collections.emptyList());
 
-        verify(certificateMapper, never()).insert(any());
-    }
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.issue(req, 1L));
+            assertTrue(ex.getMessage().contains("未通过"));
 
-    @Test
-    @DisplayName("issue: should throw BusinessException when certificate already exists (duplicate)")
-    void issue_shouldThrowOnDuplicateCertificate() {
-        CertificateIssueRequest req = new CertificateIssueRequest();
-        req.setStudentId(1L);
-        req.setCourseId(10L);
+            verify(certificateMapper, never()).insert(any());
+        }
 
-        when(certificateMapper.selectOne(any())).thenReturn(validCert); // existing VALID cert
+        @Test
+        @DisplayName("should throw on duplicate certificate")
+        void shouldThrowOnDuplicateCertificate() {
+            CertificateIssueRequest req = new CertificateIssueRequest();
+            req.setStudentId(1L);
+            req.setCourseId(10L);
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> certificateService.issue(req, 1L));
-        assertTrue(ex.getMessage().contains("已获得"));
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
 
-        // Should not proceed to check completion rate or grades
-        verify(learningRecordService, never()).getCompletionRate(anyLong(), anyLong());
-        verify(gradeMapper, never()).selectList(any());
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.issue(req, 1L));
+            assertTrue(ex.getMessage().contains("已获得"));
+
+            verify(learningRecordService, never()).getCompletionRate(anyLong(), anyLong());
+            verify(gradeMapper, never()).selectList(any());
+        }
     }
 
     // ========================================================================
     // revoke tests
     // ========================================================================
 
-    @Test
-    @DisplayName("revoke: should update status to REVOKED and create revocation record")
-    void revoke_shouldSucceed() {
-        CertificateRevokeRequest req = new CertificateRevokeRequest();
-        req.setReason("Academic dishonesty");
+    @Nested
+    @DisplayName("revoke")
+    class RevokeTests {
 
-        when(certificateMapper.selectById(1L)).thenReturn(validCert);
+        @Test
+        @DisplayName("should update status to REVOKED and create revocation record")
+        void shouldSucceed() {
+            CertificateRevokeRequest req = new CertificateRevokeRequest();
+            req.setReason("Academic dishonesty");
 
-        certificateService.revoke(1L, req, 99L);
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
 
-        // Verify certificate status updated to REVOKED
-        ArgumentCaptor<Certificate> certCaptor = ArgumentCaptor.forClass(Certificate.class);
-        verify(certificateMapper).updateById(certCaptor.capture());
-        Certificate updated = certCaptor.getValue();
-        assertEquals("REVOKED", updated.getStatus());
-        assertEquals("Academic dishonesty", updated.getRevokeReason());
-        assertEquals(99L, updated.getRevokedBy());
-        assertNotNull(updated.getRevokedAt());
+            certificateService.revoke(1L, req, 99L);
 
-        // Verify revocation record created
-        ArgumentCaptor<CertificateRevocation> revCaptor = ArgumentCaptor.forClass(CertificateRevocation.class);
-        verify(revocationMapper).insert(revCaptor.capture());
-        assertEquals(1L, revCaptor.getValue().getCertificateId());
-        assertEquals("Academic dishonesty", revCaptor.getValue().getReason());
-        assertEquals(99L, revCaptor.getValue().getRevokedBy());
-    }
+            ArgumentCaptor<Certificate> certCaptor = ArgumentCaptor.forClass(Certificate.class);
+            verify(certificateMapper).updateById(certCaptor.capture());
+            Certificate updated = certCaptor.getValue();
+            assertEquals("REVOKED", updated.getStatus());
+            assertEquals("Academic dishonesty", updated.getRevokeReason());
+            assertEquals(99L, updated.getRevokedBy());
+            assertNotNull(updated.getRevokedAt());
 
-    @Test
-    @DisplayName("revoke: should throw BusinessException when certificate is already revoked")
-    void revoke_shouldThrowWhenAlreadyRevoked() {
-        validCert.setStatus("REVOKED");
+            ArgumentCaptor<CertificateRevocation> revCaptor = ArgumentCaptor.forClass(CertificateRevocation.class);
+            verify(revocationMapper).insert(revCaptor.capture());
+            assertEquals(1L, revCaptor.getValue().getCertificateId());
+            assertEquals("Academic dishonesty", revCaptor.getValue().getReason());
+            assertEquals(99L, revCaptor.getValue().getRevokedBy());
+        }
 
-        CertificateRevokeRequest req = new CertificateRevokeRequest();
-        req.setReason("test reason");
+        @Test
+        @DisplayName("should throw when certificate is already revoked")
+        void shouldThrowWhenAlreadyRevoked() {
+            validCert.setStatus("REVOKED");
 
-        when(certificateMapper.selectById(1L)).thenReturn(validCert);
+            CertificateRevokeRequest req = new CertificateRevokeRequest();
+            req.setReason("test reason");
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> certificateService.revoke(1L, req, 1L));
-        assertTrue(ex.getMessage().contains("已被撤销"));
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
 
-        verify(certificateMapper, never()).updateById(any());
-        verify(revocationMapper, never()).insert(any());
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.revoke(1L, req, 1L));
+            assertTrue(ex.getMessage().contains("已被撤销"));
+
+            verify(certificateMapper, never()).updateById(any());
+            verify(revocationMapper, never()).insert(any());
+        }
     }
 
     // ========================================================================
     // verifyByCertNo tests
     // ========================================================================
 
-    @Test
-    @DisplayName("verifyByCertNo: should return valid=true for a valid certificate")
-    void verifyByCertNo_shouldReturnValidForValidCert() {
-        when(certificateMapper.selectOne(any())).thenReturn(validCert);
+    @Nested
+    @DisplayName("verifyByCertNo")
+    class VerifyByCertNoTests {
 
-        Map<String, Object> result = certificateService.verifyByCertNo("CERT-10-20260610-0001");
+        @Test
+        @DisplayName("should return valid=true for a valid certificate")
+        void shouldReturnValidForValidCert() {
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
 
-        assertTrue((Boolean) result.get("valid"));
-        assertEquals("证书有效", result.get("message"));
-        assertEquals("CERT-10-20260610-0001", result.get("certNo"));
-        assertEquals("Java Completion Certificate", result.get("title"));
-        assertEquals(1L, result.get("studentId"));
-        assertEquals(10L, result.get("courseId"));
-    }
+            Map<String, Object> result = certificateService.verifyByCertNo("CERT-10-20260610-0001");
 
-    @Test
-    @DisplayName("verifyByCertNo: should return valid=false with revoke reason for revoked certificate")
-    void verifyByCertNo_shouldReturnInvalidForRevokedCert() {
-        validCert.setStatus("REVOKED");
-        validCert.setRevokeReason("Cheating during exam");
-        validCert.setRevokedAt(LocalDateTime.of(2026, 6, 5, 10, 0));
+            assertTrue((Boolean) result.get("valid"));
+            assertEquals("证书有效", result.get("message"));
+            assertEquals("CERT-10-20260610-0001", result.get("certNo"));
+        }
 
-        when(certificateMapper.selectOne(any())).thenReturn(validCert);
+        @Test
+        @DisplayName("should return valid=false with revoke reason for revoked certificate")
+        void shouldReturnInvalidForRevokedCert() {
+            validCert.setStatus("REVOKED");
+            validCert.setRevokeReason("Cheating during exam");
+            validCert.setRevokedAt(LocalDateTime.of(2026, 6, 5, 10, 0));
 
-        Map<String, Object> result = certificateService.verifyByCertNo("CERT-10-20260610-0001");
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
 
-        assertFalse((Boolean) result.get("valid"));
-        assertEquals("该证书已撤销", result.get("message"));
-        assertEquals("Cheating during exam", result.get("revokeReason"));
-        assertNotNull(result.get("revokedAt"));
-    }
+            Map<String, Object> result = certificateService.verifyByCertNo("CERT-10-20260610-0001");
 
-    @Test
-    @DisplayName("verifyByCertNo: should return valid=false for non-existent cert number")
-    void verifyByCertNo_shouldReturnInvalidForNonExistent() {
-        when(certificateMapper.selectOne(any())).thenReturn(null);
+            assertFalse((Boolean) result.get("valid"));
+            assertEquals("该证书已撤销", result.get("message"));
+            assertEquals("Cheating during exam", result.get("revokeReason"));
+            assertNotNull(result.get("revokedAt"));
+        }
 
-        Map<String, Object> result = certificateService.verifyByCertNo("FAKE-CERT-999");
+        @Test
+        @DisplayName("should return valid=false for non-existent cert number")
+        void shouldReturnInvalidForNonExistent() {
+            when(certificateMapper.selectOne(any())).thenReturn(null);
 
-        assertFalse((Boolean) result.get("valid"));
-        assertEquals("证书编号不存在", result.get("message"));
+            Map<String, Object> result = certificateService.verifyByCertNo("FAKE-CERT-999");
+
+            assertFalse((Boolean) result.get("valid"));
+            assertEquals("证书编号不存在", result.get("message"));
+        }
     }
 
     // ========================================================================
-    // verifyByToken tests
+    // verifyByToken tests (critical: revocation must be checked before token expiry)
     // ========================================================================
 
-    @Test
-    @DisplayName("verifyByToken: should return valid=false with expired flag for expired token")
-    void verifyByToken_shouldReturnExpiredForExpiredToken() {
-        validCert.setVerifyTokenExpiresAt(LocalDateTime.now().minusDays(1));
+    @Nested
+    @DisplayName("verifyByToken")
+    class VerifyByTokenTests {
 
-        when(certificateMapper.selectOne(any())).thenReturn(validCert);
+        @Test
+        @DisplayName("should return valid=true for a valid unexpired token")
+        void shouldReturnValidForValidToken() {
+            validCert.setVerifyTokenExpiresAt(LocalDateTime.now().plusDays(5));
 
-        Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
 
-        assertFalse((Boolean) result.get("valid"));
-        assertTrue((Boolean) result.get("expired"));
-        assertEquals("验证链接已过期，请联系管理员重新生成", result.get("message"));
-        assertEquals(1L, result.get("certId"));
+            Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+
+            assertTrue((Boolean) result.get("valid"));
+            assertEquals("证书有效", result.get("message"));
+            assertEquals("CERT-10-20260610-0001", result.get("certNo"));
+        }
+
+        @Test
+        @DisplayName("should return valid=false with expired flag for expired token on valid cert")
+        void shouldReturnExpiredForExpiredTokenOnValidCert() {
+            validCert.setVerifyTokenExpiresAt(LocalDateTime.now().minusDays(1));
+
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
+
+            Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+
+            assertFalse((Boolean) result.get("valid"));
+            assertTrue((Boolean) result.get("expired"));
+            assertEquals("验证链接已过期，请联系管理员重新生成", result.get("message"));
+        }
+
+        @Test
+        @DisplayName("should return valid=false for non-existent token")
+        void shouldReturnInvalidForNonExistentToken() {
+            when(certificateMapper.selectOne(any())).thenReturn(null);
+
+            Map<String, Object> result = certificateService.verifyByToken("nonexistent-token");
+
+            assertFalse((Boolean) result.get("valid"));
+            assertEquals("验证链接无效", result.get("message"));
+        }
+
+        @Test
+        @DisplayName("CRITICAL: revoked cert with expired token must show REVOKED, not expired")
+        void revokedCertWithExpiredTokenMustShowRevoked() {
+            // This is the critical scenario: cert is revoked AND token has expired.
+            // The verify endpoint must show "revoked" status, not "token expired".
+            // Otherwise, someone with a revoked cert could think it's just a token issue
+            // and try to regenerate — which must be blocked.
+            validCert.setStatus("REVOKED");
+            validCert.setRevokeReason("Academic dishonesty");
+            validCert.setRevokedAt(LocalDateTime.of(2026, 6, 5, 10, 0));
+            validCert.setVerifyTokenExpiresAt(LocalDateTime.now().minusDays(10)); // expired token
+
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
+
+            Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+
+            // Must show revoked, NOT expired
+            assertFalse((Boolean) result.get("valid"));
+            assertEquals("该证书已撤销", result.get("message"));
+            assertEquals("Academic dishonesty", result.get("revokeReason"));
+            assertNotNull(result.get("revokedAt"));
+
+            // Must NOT show as "expired"
+            assertNull(result.get("expired"));
+        }
+
+        @Test
+        @DisplayName("revoked cert with valid token must also show REVOKED")
+        void revokedCertWithValidTokenMustShowRevoked() {
+            validCert.setStatus("REVOKED");
+            validCert.setRevokeReason("Fraud");
+            validCert.setRevokedAt(LocalDateTime.of(2026, 6, 8, 14, 0));
+            validCert.setVerifyTokenExpiresAt(LocalDateTime.now().plusDays(5)); // still valid
+
+            when(certificateMapper.selectOne(any())).thenReturn(validCert);
+
+            Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+
+            assertFalse((Boolean) result.get("valid"));
+            assertEquals("该证书已撤销", result.get("message"));
+            assertEquals("Fraud", result.get("revokeReason"));
+        }
     }
 
-    @Test
-    @DisplayName("verifyByToken: should return valid=true for a valid unexpired token")
-    void verifyByToken_shouldReturnValidForValidToken() {
-        // Token expires in the future, cert is VALID
-        validCert.setVerifyTokenExpiresAt(LocalDateTime.now().plusDays(5));
+    // ========================================================================
+    // regenerateVerifyToken tests
+    // ========================================================================
 
-        when(certificateMapper.selectOne(any())).thenReturn(validCert);
+    @Nested
+    @DisplayName("regenerateVerifyToken")
+    class RegenerateTokenTests {
 
-        Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+        @Test
+        @DisplayName("should generate new token for valid certificate")
+        void shouldGenerateNewTokenForValidCert() {
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
 
-        assertTrue((Boolean) result.get("valid"));
-        assertEquals("证书有效", result.get("message"));
-        assertEquals("CERT-10-20260610-0001", result.get("certNo"));
-        assertNotNull(result.get("issueDate"));
-    }
+            String newToken = certificateService.regenerateVerifyToken(1L);
 
-    @Test
-    @DisplayName("verifyByToken: should return valid=false for non-existent token")
-    void verifyByToken_shouldReturnInvalidForNonExistentToken() {
-        when(certificateMapper.selectOne(any())).thenReturn(null);
+            assertNotNull(newToken);
+            assertNotEquals("abc123token456", newToken);
+            verify(certificateMapper).updateById(any(Certificate.class));
+        }
 
-        Map<String, Object> result = certificateService.verifyByToken("nonexistent-token");
+        @Test
+        @DisplayName("CRITICAL: should throw for revoked certificate — prevent re-enabling verify link")
+        void shouldThrowForRevokedCert() {
+            validCert.setStatus("REVOKED");
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
 
-        assertFalse((Boolean) result.get("valid"));
-        assertEquals("验证链接无效", result.get("message"));
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateService.regenerateVerifyToken(1L));
+            assertTrue(ex.getMessage().contains("已撤销"));
+
+            // Must NOT update the certificate
+            verify(certificateMapper, never()).updateById(any());
+        }
     }
 }

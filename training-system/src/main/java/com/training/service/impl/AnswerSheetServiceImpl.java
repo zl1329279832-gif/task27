@@ -45,6 +45,14 @@ public class AnswerSheetServiceImpl implements AnswerSheetService {
             throw new BusinessException("无权查看此答卷");
         }
 
+        // Build snapshot lookup for frozen question data
+        java.util.Map<Long, AnswerSheet.QuestionSnapshot> snapshotMap = new java.util.HashMap<>();
+        if (sheet.getQuestionSnapshot() != null) {
+            for (AnswerSheet.QuestionSnapshot snap : sheet.getQuestionSnapshot()) {
+                snapshotMap.put(snap.getQuestionId(), snap);
+            }
+        }
+
         List<AnswerDetail> details = answerDetailMapper.selectList(
                 new LambdaQueryWrapper<AnswerDetail>()
                         .eq(AnswerDetail::getAnswerSheetId, id));
@@ -62,29 +70,30 @@ public class AnswerSheetServiceImpl implements AnswerSheetService {
             item.setScoreEarned(detail.getScoreEarned());
             item.setGradingNote(detail.getGradingNote());
 
-            // LEFT JOIN question - handle deleted questions
-            Question question = questionMapper.selectById(detail.getQuestionId());
-            if (question == null || "DELETED".equals(question.getStatus())) {
-                item.setQuestionDeleted(true);
-                item.setQuestionContent("[该题目已删除]");
-                item.setQuestionType("UNKNOWN");
-                item.setCorrectAnswer(null); // Don't show correct answer for deleted questions
-
-                // Give full score for deleted questions
-                ExamQuestion eq = detail.getExamQuestionId() != null ?
-                        examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-                item.setMaxScore(eq != null && eq.getScoreOverride() != null ?
-                        eq.getScoreOverride() : 10);
-            } else {
+            // Use frozen snapshot data first, fall back to live question table
+            AnswerSheet.QuestionSnapshot snap = snapshotMap.get(detail.getQuestionId());
+            if (snap != null) {
                 item.setQuestionDeleted(false);
-                item.setQuestionContent(question.getContent());
-                item.setQuestionType(question.getQuestionType());
-                item.setCorrectAnswer(question.getCorrectAnswer());
-
-                ExamQuestion eq = detail.getExamQuestionId() != null ?
-                        examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-                item.setMaxScore(eq != null && eq.getScoreOverride() != null ?
-                        eq.getScoreOverride() : question.getScore());
+                item.setQuestionContent(snap.getContent());
+                item.setQuestionType(snap.getQuestionType());
+                item.setCorrectAnswer(snap.getCorrectAnswer());
+                item.setMaxScore(snap.getScore());
+            } else {
+                // Legacy fallback: read from live question table
+                Question question = questionMapper.selectById(detail.getQuestionId());
+                if (question == null || "DELETED".equals(question.getStatus())) {
+                    item.setQuestionDeleted(true);
+                    item.setQuestionContent("[该题目已删除]");
+                    item.setQuestionType("UNKNOWN");
+                    item.setCorrectAnswer(null);
+                    item.setMaxScore(detail.getSnapshotScore() != null ? detail.getSnapshotScore() : 10);
+                } else {
+                    item.setQuestionDeleted(false);
+                    item.setQuestionContent(question.getContent());
+                    item.setQuestionType(question.getQuestionType());
+                    item.setCorrectAnswer(question.getCorrectAnswer());
+                    item.setMaxScore(detail.getSnapshotScore() != null ? detail.getSnapshotScore() : question.getScore());
+                }
             }
 
             items.add(item);
@@ -101,6 +110,15 @@ public class AnswerSheetServiceImpl implements AnswerSheetService {
         if ("IN_PROGRESS".equals(sheet.getStatus())) throw new BusinessException("答卷尚未提交");
 
         Exam exam = examMapper.selectById(sheet.getExamId());
+
+        // Build snapshot lookup for frozen question data
+        java.util.Map<Long, AnswerSheet.QuestionSnapshot> snapshotMap = new java.util.HashMap<>();
+        if (sheet.getQuestionSnapshot() != null) {
+            for (AnswerSheet.QuestionSnapshot snap : sheet.getQuestionSnapshot()) {
+                snapshotMap.put(snap.getQuestionId(), snap);
+            }
+        }
+
         List<AnswerDetail> details = answerDetailMapper.selectList(
                 new LambdaQueryWrapper<AnswerDetail>()
                         .eq(AnswerDetail::getAnswerSheetId, id));
@@ -109,29 +127,67 @@ public class AnswerSheetServiceImpl implements AnswerSheetService {
         boolean allGraded = true;
 
         for (AnswerDetail detail : details) {
-            Question question = questionMapper.selectById(detail.getQuestionId());
-            ExamQuestion eq = detail.getExamQuestionId() != null ?
-                    examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-            int qScore = (eq != null && eq.getScoreOverride() != null) ?
-                    eq.getScoreOverride() : (question != null ? question.getScore() : 10);
+            // Use frozen data from AnswerDetail / snapshot, NOT live question table
+            String questionType = null;
+            int qScore = detail.getSnapshotScore() != null ? detail.getSnapshotScore() : 0;
+            String correctAns = detail.getCorrectAnswer();
 
-            if (question == null || "DELETED".equals(question.getStatus())) {
-                detail.setIsCorrect(1);
-                detail.setScoreEarned((double) qScore);
-                detail.setGradingNote("题目已删除，自动给满分");
-                answerDetailMapper.updateById(detail);
-                totalScore += qScore;
-                continue;
+            AnswerSheet.QuestionSnapshot snap = snapshotMap.get(detail.getQuestionId());
+            if (snap != null) {
+                questionType = snap.getQuestionType();
+                if (detail.getSnapshotScore() == null) qScore = snap.getScore();
+                if (correctAns == null) correctAns = snap.getCorrectAnswer();
             }
 
-            if (detail.getIsCorrect() == null) {
+            // Legacy fallback: if no snapshot data, read from question table
+            if (questionType == null) {
+                Question question = questionMapper.selectById(detail.getQuestionId());
+                if (question == null || "DELETED".equals(question.getStatus())) {
+                    if (qScore == 0) qScore = 10;
+                    detail.setIsCorrect(1);
+                    detail.setScoreEarned((double) qScore);
+                    detail.setGradingNote("题目已删除，自动给满分");
+                    answerDetailMapper.updateById(detail);
+                    totalScore += qScore;
+                    continue;
+                }
+                questionType = question.getQuestionType();
+                if (correctAns == null) correctAns = question.getCorrectAnswer();
+                if (qScore == 0) qScore = question.getScore();
+            }
+
+            if ("SHORT_ANSWER".equals(questionType) && detail.getIsCorrect() == null) {
                 // Still needs manual grading for subjective questions
                 allGraded = false;
                 continue;
             }
 
-            if (detail.getIsCorrect() == 1) {
+            // Re-grade objective questions using frozen correctAnswer
+            if (correctAns != null && detail.getStudentAnswer() != null) {
+                boolean isCorrect;
+                String studentAns = detail.getStudentAnswer().trim();
+                String frozenCorrectAns = correctAns.trim();
+
+                if ("MULTI_CHOICE".equals(questionType)) {
+                    String[] sArr = studentAns.split("[,，、]");
+                    String[] cArr = frozenCorrectAns.split("[,，、]");
+                    java.util.Arrays.sort(sArr);
+                    java.util.Arrays.sort(cArr);
+                    isCorrect = java.util.Arrays.equals(sArr, cArr);
+                } else {
+                    isCorrect = studentAns.equalsIgnoreCase(frozenCorrectAns);
+                }
+
+                detail.setIsCorrect(isCorrect ? 1 : 0);
+                detail.setScoreEarned(isCorrect ? (double) qScore : 0.0);
+                detail.setGradingNote("重新批改");
+                answerDetailMapper.updateById(detail);
+            }
+
+            if (detail.getIsCorrect() != null && detail.getIsCorrect() == 1) {
                 totalScore += qScore;
+            } else if (detail.getIsCorrect() == null) {
+                allGraded = false;
             }
         }
 

@@ -26,6 +26,12 @@ public class AnswerDetail {
 
     private String studentAnswer;
 
+    /** Correct answer frozen at exam start time (from question snapshot) */
+    private String correctAnswer;
+
+    /** Question score frozen at exam start time (from snapshot or scoreOverride) */
+    private Integer snapshotScore;
+
     private Integer isCorrect;
 
     private Double scoreEarned;

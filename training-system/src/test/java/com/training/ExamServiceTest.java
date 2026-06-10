@@ -8,6 +8,7 @@ import com.training.mapper.*;
 import com.training.service.impl.ExamServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -68,326 +69,573 @@ class ExamServiceTest {
     }
 
     // ========================================================================
+    // Helper methods
+    // ========================================================================
+
+    private AnswerSheet.QuestionSnapshot buildSnapshot(Long qId, Long eqId, String content,
+                                                        String type, String correctAns,
+                                                        int score, int sortOrder) {
+        return AnswerSheet.QuestionSnapshot.builder()
+                .questionId(qId)
+                .examQuestionId(eqId)
+                .content(content)
+                .questionType(type)
+                .correctAnswer(correctAns)
+                .score(score)
+                .sortOrder(sortOrder)
+                .build();
+    }
+
+    private AnswerSubmitRequest buildSubmitRequest(Long sheetId, Long... questionIds) {
+        AnswerSubmitRequest req = new AnswerSubmitRequest();
+        req.setAnswerSheetId(sheetId);
+        if (questionIds != null && questionIds.length > 0) {
+            var answers = new java.util.ArrayList<AnswerSubmitRequest.AnswerItem>();
+            for (Long qId : questionIds) {
+                AnswerSubmitRequest.AnswerItem item = new AnswerSubmitRequest.AnswerItem();
+                item.setQuestionId(qId);
+                item.setAnswer("A");
+                answers.add(item);
+            }
+            req.setAnswers(answers);
+        } else {
+            req.setAnswers(Collections.emptyList());
+        }
+        return req;
+    }
+
+    // ========================================================================
     // startExam tests
     // ========================================================================
 
-    @Test
-    @DisplayName("startExam: should create answer sheet and return questions for new attempt")
-    void startExam_shouldCreateAnswerSheetAndReturnQuestions() {
-        Question q = Question.builder()
-                .id(100L)
-                .content("What is Java?")
-                .questionType("SINGLE_CHOICE")
-                .options(Arrays.asList("Compiled", "Interpreted", "Assembly", "Machine"))
-                .correctAnswer("A")
-                .score(20)
-                .status("ACTIVE")
-                .build();
+    @Nested
+    @DisplayName("startExam")
+    class StartExamTests {
 
-        ExamQuestion eq = ExamQuestion.builder()
-                .id(1L).examId(1L).questionId(100L).sortOrder(1).build();
+        @Test
+        @DisplayName("should create answer sheet with frozen question snapshot")
+        void shouldCreateAnswerSheetWithSnapshot() {
+            Question q = Question.builder()
+                    .id(100L)
+                    .content("What is Java?")
+                    .questionType("SINGLE_CHOICE")
+                    .options(Arrays.asList("Compiled", "Interpreted", "Assembly", "Machine"))
+                    .correctAnswer("A")
+                    .score(20)
+                    .status("ACTIVE")
+                    .build();
 
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
-        when(answerSheetMapper.selectCount(any())).thenReturn(0L);
-        when(answerSheetMapper.selectOne(any())).thenReturn(null);
-        when(examQuestionMapper.selectList(any())).thenReturn(List.of(eq));
-        when(questionMapper.selectById(100L)).thenReturn(q);
+            ExamQuestion eq = ExamQuestion.builder()
+                    .id(1L).examId(1L).questionId(100L).sortOrder(1).build();
 
-        ExamStartResponse response = examService.startExam(1L, 1L);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(0L);
+            when(answerSheetMapper.selectOne(any())).thenReturn(null);
+            when(examQuestionMapper.selectList(any())).thenReturn(List.of(eq));
+            when(questionMapper.selectById(100L)).thenReturn(q);
 
-        assertNotNull(response);
-        assertFalse(response.getResumed());
-        assertEquals(1, response.getAttemptNo());
-        assertEquals(3600, response.getRemainingSeconds());
-        assertEquals(1, response.getQuestions().size());
-        assertEquals("What is Java?", response.getQuestions().get(0).getContent());
-        assertTrue(response.getExistingAnswers().isEmpty());
+            ExamStartResponse response = examService.startExam(1L, 1L);
 
-        verify(answerSheetMapper).insert(any(AnswerSheet.class));
-        verify(answerDetailMapper).insert(any(AnswerDetail.class));
-        verify(valueOperations).set(eq("exam:timeout:" + response.getAnswerSheetId()),
-                eq("1"), eq(3600L), eq(TimeUnit.SECONDS));
+            assertNotNull(response);
+            assertFalse(response.getResumed());
+            assertEquals(1, response.getAttemptNo());
+            assertEquals(3600, response.getRemainingSeconds());
+            assertEquals(1, response.getQuestions().size());
+            assertEquals("What is Java?", response.getQuestions().get(0).getContent());
+            assertTrue(response.getExistingAnswers().isEmpty());
+
+            // Verify snapshot is saved to answer sheet
+            ArgumentCaptor<AnswerSheet> sheetCaptor = ArgumentCaptor.forClass(AnswerSheet.class);
+            verify(answerSheetMapper, atLeast(1)).updateById(sheetCaptor.capture());
+            AnswerSheet updatedSheet = sheetCaptor.getValue();
+            assertNotNull(updatedSheet.getQuestionSnapshot());
+            assertEquals(1, updatedSheet.getQuestionSnapshot().size());
+            assertEquals("What is Java?", updatedSheet.getQuestionSnapshot().get(0).getContent());
+            assertEquals("A", updatedSheet.getQuestionSnapshot().get(0).getCorrectAnswer());
+            assertEquals(20, updatedSheet.getQuestionSnapshot().get(0).getScore());
+
+            // Verify AnswerDetail has frozen correctAnswer and snapshotScore
+            ArgumentCaptor<AnswerDetail> detailCaptor = ArgumentCaptor.forClass(AnswerDetail.class);
+            verify(answerDetailMapper).insert(detailCaptor.capture());
+            AnswerDetail savedDetail = detailCaptor.getValue();
+            assertEquals("A", savedDetail.getCorrectAnswer());
+            assertEquals(20, savedDetail.getSnapshotScore());
+
+            verify(answerSheetMapper).insert(any(AnswerSheet.class));
+            verify(valueOperations).set(eq("exam:timeout:" + response.getAnswerSheetId()),
+                    eq("1"), eq(3600L), eq(TimeUnit.SECONDS));
+        }
+
+        @Test
+        @DisplayName("should throw BusinessException when max attempts exceeded")
+        void shouldThrowWhenMaxAttemptsExceeded() {
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(3L);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.startExam(1L, 1L));
+            assertTrue(ex.getMessage().contains("最大考试次数"));
+        }
+
+        @Test
+        @DisplayName("should throw BusinessException when exam is not published")
+        void shouldThrowWhenExamNotPublished() {
+            publishedExam.setStatus("DRAFT");
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.startExam(1L, 1L));
+            assertTrue(ex.getMessage().contains("未发布"));
+        }
     }
 
-    @Test
-    @DisplayName("startExam: should resume with existing answers on breakpoint continuation")
-    void startExam_shouldResumeWithExistingAnswers() {
-        AnswerSheet existingSheet = AnswerSheet.builder()
-                .id(5L).examId(1L).studentId(1L).attemptNo(1)
-                .status("IN_PROGRESS").remainingSeconds(1800)
-                .startTime(LocalDateTime.now().minusMinutes(30))
-                .tabSwitchCount(0).build();
+    // ========================================================================
+    // Breakpoint resume tests (critical: must use frozen snapshot)
+    // ========================================================================
 
-        AnswerDetail detail = AnswerDetail.builder()
-                .id(10L).answerSheetId(5L).questionId(100L).examQuestionId(1L)
-                .studentAnswer("A").build();
+    @Nested
+    @DisplayName("Breakpoint Resume (断点续考)")
+    class BreakpointResumeTests {
 
-        Question q = Question.builder()
-                .id(100L).content("What is Java?").questionType("SINGLE_CHOICE")
-                .correctAnswer("A").score(20).status("ACTIVE").build();
+        @Test
+        @DisplayName("resume should use frozen snapshot even when question is deleted from bank")
+        void resumeShouldUseSnapshotWhenQuestionDeleted() {
+            // Simulate: student started exam, then admin deleted question from bank
+            AnswerSheet.QuestionSnapshot frozenSnapshot = buildSnapshot(
+                    100L, 1L, "Original question content",
+                    "SINGLE_CHOICE", "A", 20, 1);
 
-        ExamQuestion eq = ExamQuestion.builder()
-                .id(1L).examId(1L).questionId(100L).sortOrder(1).build();
+            AnswerSheet existingSheet = AnswerSheet.builder()
+                    .id(5L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").remainingSeconds(1800)
+                    .startTime(LocalDateTime.now().minusMinutes(30))
+                    .tabSwitchCount(0)
+                    .questionSnapshot(List.of(frozenSnapshot))
+                    .build();
 
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
-        when(answerSheetMapper.selectCount(any())).thenReturn(0L);
-        when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
-        when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
-        when(questionMapper.selectById(100L)).thenReturn(q);
-        when(examQuestionMapper.selectById(1L)).thenReturn(eq);
-        when(redisTemplate.getExpire(anyString(), eq(TimeUnit.SECONDS))).thenReturn(1500L);
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(10L).answerSheetId(5L).questionId(100L).examQuestionId(1L)
+                    .studentAnswer("A")
+                    .correctAnswer("A").snapshotScore(20)
+                    .build();
 
-        ExamStartResponse response = examService.startExam(1L, 1L);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(0L);
+            when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
+            when(redisTemplate.getExpire(anyString(), eq(TimeUnit.SECONDS))).thenReturn(1500L);
 
-        assertTrue(response.getResumed());
-        assertEquals(5L, response.getAnswerSheetId());
-        assertEquals(1, response.getAttemptNo());
-        assertEquals(1500, response.getRemainingSeconds());
-        assertEquals(1, response.getQuestions().size());
-        assertEquals(1, response.getExistingAnswers().size());
-        assertEquals("A", response.getExistingAnswers().get(0).getStudentAnswer());
-        assertEquals(100L, response.getExistingAnswers().get(0).getQuestionId());
+            ExamStartResponse response = examService.startExam(1L, 1L);
 
-        verify(answerSheetMapper, never()).insert(any());
-    }
+            assertTrue(response.getResumed());
+            assertEquals(5L, response.getAnswerSheetId());
+            assertEquals(1500, response.getRemainingSeconds());
 
-    @Test
-    @DisplayName("startExam: should throw BusinessException when max attempts exceeded")
-    void startExam_shouldThrowWhenMaxAttemptsExceeded() {
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
-        when(answerSheetMapper.selectCount(any())).thenReturn(3L);
+            // CRITICAL: question content comes from SNAPSHOT, not live table
+            assertEquals(1, response.getQuestions().size());
+            assertEquals("Original question content", response.getQuestions().get(0).getContent());
+            assertEquals(20, response.getQuestions().get(0).getScore());
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> examService.startExam(1L, 1L));
-        assertTrue(ex.getMessage().contains("最大考试次数"));
+            // Verify we did NOT read from the question table
+            verify(questionMapper, never()).selectById(anyLong());
+
+            // Verify existing answers preserved
+            assertEquals(1, response.getExistingAnswers().size());
+            assertEquals("A", response.getExistingAnswers().get(0).getStudentAnswer());
+
+            // No new answer sheet or detail created
+            verify(answerSheetMapper, never()).insert(any());
+            verify(answerDetailMapper, never()).insert(any());
+        }
+
+        @Test
+        @DisplayName("resume should use frozen snapshot even when question content was modified")
+        void resumeShouldUseSnapshotWhenQuestionModified() {
+            // Simulate: admin changed question content after student started exam
+            AnswerSheet.QuestionSnapshot frozenSnapshot = buildSnapshot(
+                    100L, 1L, "Original version of question",
+                    "SINGLE_CHOICE", "B", 25, 1);
+
+            AnswerSheet existingSheet = AnswerSheet.builder()
+                    .id(5L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").remainingSeconds(1800)
+                    .startTime(LocalDateTime.now().minusMinutes(30))
+                    .tabSwitchCount(0)
+                    .questionSnapshot(List.of(frozenSnapshot))
+                    .build();
+
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(10L).answerSheetId(5L).questionId(100L).examQuestionId(1L)
+                    .correctAnswer("B").snapshotScore(25)
+                    .build();
+
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(0L);
+            when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
+            when(redisTemplate.getExpire(anyString(), eq(TimeUnit.SECONDS))).thenReturn(1500L);
+
+            ExamStartResponse response = examService.startExam(1L, 1L);
+
+            assertTrue(response.getResumed());
+            // Must show FROZEN content, NOT modified content
+            assertEquals("Original version of question", response.getQuestions().get(0).getContent());
+            assertEquals(25, response.getQuestions().get(0).getScore());
+
+            // Never read from live question table
+            verify(questionMapper, never()).selectById(anyLong());
+        }
+
+        @Test
+        @DisplayName("resume should compute remaining time from DB when Redis TTL expired")
+        void resumeShouldFallbackToDbTimeWhenRedisExpired() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    100L, 1L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
+
+            AnswerSheet existingSheet = AnswerSheet.builder()
+                    .id(5L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").remainingSeconds(3600)
+                    .startTime(LocalDateTime.now().minusMinutes(30))
+                    .tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
+
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(10L).answerSheetId(5L).questionId(100L).examQuestionId(1L)
+                    .correctAnswer("A").snapshotScore(20)
+                    .build();
+
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerSheetMapper.selectCount(any())).thenReturn(0L);
+            when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
+            // Redis key has expired (returns negative TTL)
+            when(redisTemplate.getExpire(anyString(), eq(TimeUnit.SECONDS))).thenReturn(-2L);
+
+            ExamStartResponse response = examService.startExam(1L, 1L);
+
+            assertTrue(response.getResumed());
+            // 60 minutes total - 30 minutes elapsed = ~30 minutes remaining
+            assertTrue(response.getRemainingSeconds() > 0);
+            assertTrue(response.getRemainingSeconds() <= 1860); // ~31 min with test timing tolerance
+        }
     }
 
     // ========================================================================
     // submitExam tests
     // ========================================================================
 
-    @Test
-    @DisplayName("submitExam: should auto-grade SINGLE_CHOICE, MULTI_CHOICE, and TRUE_FALSE correctly")
-    void submitExam_shouldAutoGradeObjectiveQuestions() {
-        AnswerSheet sheet = AnswerSheet.builder()
-                .id(1L).examId(1L).studentId(1L).attemptNo(1)
-                .status("IN_PROGRESS").tabSwitchCount(0).build();
+    @Nested
+    @DisplayName("submitExam")
+    class SubmitExamTests {
 
-        // Four questions: SINGLE_CHOICE, MULTI_CHOICE, TRUE_FALSE, SHORT_ANSWER
-        AnswerDetail d1 = AnswerDetail.builder()
-                .id(1L).answerSheetId(1L).questionId(101L).examQuestionId(201L).build();
-        AnswerDetail d2 = AnswerDetail.builder()
-                .id(2L).answerSheetId(1L).questionId(102L).examQuestionId(202L).build();
-        AnswerDetail d3 = AnswerDetail.builder()
-                .id(3L).answerSheetId(1L).questionId(103L).examQuestionId(203L).build();
-        AnswerDetail d4 = AnswerDetail.builder()
-                .id(4L).answerSheetId(1L).questionId(104L).examQuestionId(204L).build();
+        @Test
+        @DisplayName("should auto-grade using frozen correctAnswer, not live question data")
+        void shouldAutoGradeUsingFrozenData() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    101L, 201L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
 
-        Question q1 = Question.builder()
-                .id(101L).questionType("SINGLE_CHOICE").correctAnswer("A").score(20).status("ACTIVE").build();
-        Question q2 = Question.builder()
-                .id(102L).questionType("MULTI_CHOICE").correctAnswer("A,B").score(20).status("ACTIVE").build();
-        Question q3 = Question.builder()
-                .id(103L).questionType("TRUE_FALSE").correctAnswer("True").score(20).status("ACTIVE").build();
-        Question q4 = Question.builder()
-                .id(104L).questionType("SHORT_ANSWER").correctAnswer("N/A").score(40).status("ACTIVE").build();
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
 
-        ExamQuestion eq1 = ExamQuestion.builder().id(201L).examId(1L).questionId(101L).sortOrder(1).build();
-        ExamQuestion eq2 = ExamQuestion.builder().id(202L).examId(1L).questionId(102L).sortOrder(2).build();
-        ExamQuestion eq3 = ExamQuestion.builder().id(203L).examId(1L).questionId(103L).sortOrder(3).build();
-        ExamQuestion eq4 = ExamQuestion.builder().id(204L).examId(1L).questionId(104L).sortOrder(4).build();
+            AnswerDetail d1 = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(101L).examQuestionId(201L)
+                    .studentAnswer("A")
+                    .correctAnswer("A")  // frozen correct answer
+                    .snapshotScore(20)   // frozen score
+                    .build();
 
-        // Pre-set student answers on the detail objects.
-        // In the actual flow, submitExam saves answers via selectOne+updateById before auto-grading.
-        // Since our selectOne mock returns null (skipping the save loop), we pre-populate answers
-        // to ensure autoGrade can find them during grading.
-        d1.setStudentAnswer("A");       // SINGLE_CHOICE: correct
-        d2.setStudentAnswer("A,B");     // MULTI_CHOICE: correct
-        d3.setStudentAnswer("True");    // TRUE_FALSE: correct
-        d4.setStudentAnswer("essay answer"); // SHORT_ANSWER: needs manual grading
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(null);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(d1));
 
-        when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
-        when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
-                .thenReturn(null); // null means not blocked (proceed)
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
-        when(answerDetailMapper.selectList(any())).thenReturn(Arrays.asList(d1, d2, d3, d4));
-        when(questionMapper.selectById(101L)).thenReturn(q1);
-        when(questionMapper.selectById(102L)).thenReturn(q2);
-        when(questionMapper.selectById(103L)).thenReturn(q3);
-        when(questionMapper.selectById(104L)).thenReturn(q4);
-        when(examQuestionMapper.selectById(201L)).thenReturn(eq1);
-        when(examQuestionMapper.selectById(202L)).thenReturn(eq2);
-        when(examQuestionMapper.selectById(203L)).thenReturn(eq3);
-        when(examQuestionMapper.selectById(204L)).thenReturn(eq4);
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
 
-        AnswerSubmitRequest req = new AnswerSubmitRequest();
-        req.setAnswerSheetId(1L);
-        AnswerSubmitRequest.AnswerItem a1 = new AnswerSubmitRequest.AnswerItem();
-        a1.setQuestionId(101L); a1.setExamQuestionId(201L); a1.setAnswer("A"); // correct
-        AnswerSubmitRequest.AnswerItem a2 = new AnswerSubmitRequest.AnswerItem();
-        a2.setQuestionId(102L); a2.setExamQuestionId(202L); a2.setAnswer("A,B"); // correct
-        AnswerSubmitRequest.AnswerItem a3 = new AnswerSubmitRequest.AnswerItem();
-        a3.setQuestionId(103L); a3.setExamQuestionId(203L); a3.setAnswer("True"); // correct
-        AnswerSubmitRequest.AnswerItem a4 = new AnswerSubmitRequest.AnswerItem();
-        a4.setQuestionId(104L); a4.setExamQuestionId(204L); a4.setAnswer("essay answer");
-        req.setAnswers(Arrays.asList(a1, a2, a3, a4));
+            AnswerSheet result = examService.submitExam(req, 1L);
 
-        AnswerSheet result = examService.submitExam(req, 1L);
+            assertEquals("SUBMITTED", result.getStatus());
+            // Should not read from question table - uses frozen data
+            verify(questionMapper, never()).selectById(anyLong());
 
-        // 3 objective questions correct = 60 points; SHORT_ANSWER needs manual grading
-        assertEquals("SUBMITTED", result.getStatus());
-        assertEquals(0, result.getRemainingSeconds());
+            // Verify grading used frozen data
+            ArgumentCaptor<AnswerDetail> captor = ArgumentCaptor.forClass(AnswerDetail.class);
+            verify(answerDetailMapper).updateById(captor.capture());
+            AnswerDetail graded = captor.getValue();
+            assertEquals(1, graded.getIsCorrect());
+            assertEquals(20.0, graded.getScoreEarned());
+        }
 
-        // All 4 answer details should be updated (3 graded + 1 marked for manual grading)
-        verify(answerDetailMapper, times(4)).updateById(any(AnswerDetail.class));
+        @Test
+        @DisplayName("should throw on duplicate submission (Redis idempotent check)")
+        void shouldThrowOnDuplicateSubmission() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").build();
 
-        // Verify individual answer grading via ArgumentCaptor
-        ArgumentCaptor<AnswerDetail> detailCaptor = ArgumentCaptor.forClass(AnswerDetail.class);
-        verify(answerDetailMapper, times(4)).updateById(detailCaptor.capture());
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
 
-        List<AnswerDetail> updatedDetails = detailCaptor.getAllValues();
-        // d1: SINGLE_CHOICE correct -> isCorrect=1, scoreEarned=20
-        assertEquals(1, updatedDetails.get(0).getIsCorrect());
-        // d2: MULTI_CHOICE correct -> isCorrect=1, scoreEarned=20
-        assertEquals(1, updatedDetails.get(1).getIsCorrect());
-        // d3: TRUE_FALSE correct -> isCorrect=1, scoreEarned=20
-        assertEquals(1, updatedDetails.get(2).getIsCorrect());
-        // d4: SHORT_ANSWER -> no isCorrect set, has manual grading note
-        assertEquals("待人工批改", updatedDetails.get(3).getGradingNote());
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
 
-        // Not all graded (SHORT_ANSWER pending) -> no Grade record created
-        verify(gradeMapper, never()).insert(any(Grade.class));
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.submitExam(req, 1L));
+            assertTrue(ex.getMessage().contains("重复提交"));
 
-        // Redis timeout key should be deleted
-        verify(redisTemplate).delete("exam:timeout:1");
-    }
+            verify(examMapper, never()).selectById(anyLong());
+        }
 
-    @Test
-    @DisplayName("submitExam: should throw BusinessException on duplicate submission (Redis idempotent check)")
-    void submitExam_shouldThrowOnDuplicateSubmission() {
-        AnswerSheet sheet = AnswerSheet.builder()
-                .id(1L).examId(1L).studentId(1L).attemptNo(1)
-                .status("IN_PROGRESS").build();
+        @Test
+        @DisplayName("should reject submission when answer sheet already submitted")
+        void shouldRejectWhenAlreadySubmitted() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("SUBMITTED").build();
 
-        when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
-        // Redis setIfAbsent returns false -> key already exists -> duplicate
-        when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
-                .thenReturn(false);
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
 
-        AnswerSubmitRequest req = new AnswerSubmitRequest();
-        req.setAnswerSheetId(1L);
-        req.setAnswers(Collections.emptyList());
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
 
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> examService.submitExam(req, 1L));
-        assertTrue(ex.getMessage().contains("重复提交"));
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.submitExam(req, 1L));
+            assertTrue(ex.getMessage().contains("已提交"));
+        }
 
-        // Should not reach the grading logic
-        verify(examMapper, never()).selectById(anyLong());
-    }
+        @Test
+        @DisplayName("should reject submission when answer sheet timed out")
+        void shouldRejectWhenTimedOut() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("TIMED_OUT").build();
 
-    @Test
-    @DisplayName("submitExam: should give full score when question has been deleted")
-    void submitExam_shouldGiveFullScoreForDeletedQuestion() {
-        AnswerSheet sheet = AnswerSheet.builder()
-                .id(1L).examId(1L).studentId(1L).attemptNo(1)
-                .status("IN_PROGRESS").tabSwitchCount(0).build();
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
 
-        AnswerDetail detail = AnswerDetail.builder()
-                .id(1L).answerSheetId(1L).questionId(100L).examQuestionId(200L)
-                .studentAnswer("wrong").build();
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
 
-        // Question exists but has DELETED status
-        Question deletedQ = Question.builder()
-                .id(100L).questionType("SINGLE_CHOICE").correctAnswer("A")
-                .score(10).status("DELETED").build();
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.submitExam(req, 1L));
+            assertTrue(ex.getMessage().contains("已提交或已超时"));
+        }
 
-        ExamQuestion eq = ExamQuestion.builder()
-                .id(200L).examId(1L).questionId(100L).sortOrder(1).build();
+        @Test
+        @DisplayName("should give full score for deleted question using snapshot data")
+        void shouldGiveFullScoreForDeletedQuestionWithSnapshot() {
+            // Question was in snapshot at start, then deleted from bank
+            // Since snapshot exists, grading uses snapshot data normally
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    100L, 200L, "Deleted Q", "SINGLE_CHOICE", "A", 10, 1);
 
-        when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
-        when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
-                .thenReturn(null);
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
-        when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
-        when(questionMapper.selectById(100L)).thenReturn(deletedQ);
-        when(examQuestionMapper.selectById(200L)).thenReturn(eq);
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
 
-        AnswerSubmitRequest req = new AnswerSubmitRequest();
-        req.setAnswerSheetId(1L);
-        req.setAnswers(Collections.emptyList());
+            // AnswerDetail with frozen data from snapshot
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(100L).examQuestionId(200L)
+                    .studentAnswer("wrong")
+                    .correctAnswer("A")
+                    .snapshotScore(10)
+                    .build();
 
-        AnswerSheet result = examService.submitExam(req, 1L);
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(null);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
-        // Deleted question gets full score (10 points) even though student answered wrong
-        assertEquals("SUBMITTED", result.getStatus());
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
 
-        ArgumentCaptor<AnswerDetail> captor = ArgumentCaptor.forClass(AnswerDetail.class);
-        verify(answerDetailMapper).updateById(captor.capture());
-        AnswerDetail updated = captor.getValue();
-        assertEquals(1, updated.getIsCorrect());
-        assertEquals("题目已删除，自动给满分", updated.getGradingNote());
+            AnswerSheet result = examService.submitExam(req, 1L);
+
+            assertEquals("SUBMITTED", result.getStatus());
+
+            ArgumentCaptor<AnswerDetail> captor = ArgumentCaptor.forClass(AnswerDetail.class);
+            verify(answerDetailMapper).updateById(captor.capture());
+            AnswerDetail graded = captor.getValue();
+            // Student answered "wrong" but correct was "A" -> incorrect
+            assertEquals(0, graded.getIsCorrect());
+            assertEquals(0.0, graded.getScoreEarned());
+
+            // Should not read from question table
+            verify(questionMapper, never()).selectById(anyLong());
+        }
+
+        @Test
+        @DisplayName("should auto-grade MULTI_CHOICE correctly using frozen data")
+        void shouldAutoGradeMultiChoiceWithFrozenData() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    102L, 202L, "Multi Q", "MULTI_CHOICE", "A,B,C", 30, 1);
+
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
+
+            // Student answered in different order
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(102L).examQuestionId(202L)
+                    .studentAnswer("C,A,B")
+                    .correctAnswer("A,B,C")
+                    .snapshotScore(30)
+                    .build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(null);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+
+            AnswerSheet result = examService.submitExam(req, 1L);
+
+            ArgumentCaptor<AnswerDetail> captor = ArgumentCaptor.forClass(AnswerDetail.class);
+            verify(answerDetailMapper).updateById(captor.capture());
+            assertEquals(1, captor.getValue().getIsCorrect());
+            assertEquals(30.0, captor.getValue().getScoreEarned());
+        }
+
+        @Test
+        @DisplayName("should clean up idempotent key on grading failure to allow retry")
+        void shouldCleanIdempotentKeyOnFailure() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(null);
+            // Simulate exception during grading
+            when(examMapper.selectById(1L)).thenThrow(new RuntimeException("DB error"));
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+
+            assertThrows(RuntimeException.class, () -> examService.submitExam(req, 1L));
+
+            // Idempotent key should be cleaned up on failure
+            verify(redisTemplate).delete(contains("submit:"));
+        }
     }
 
     // ========================================================================
-    // reportTabSwitch tests
+    // Timeout auto-submit tests
     // ========================================================================
 
-    @Test
-    @DisplayName("reportTabSwitch: should auto-submit when tab switches exceed anti-cheat limit")
-    void reportTabSwitch_shouldAutoSubmitWhenExceedsLimit() {
-        // tabSwitchCount = 3, after increment becomes 4, maxTabSwitches = 3 -> exceeds
-        AnswerSheet sheet = AnswerSheet.builder()
-                .id(1L).examId(1L).studentId(1L)
-                .status("IN_PROGRESS").tabSwitchCount(3).build();
+    @Nested
+    @DisplayName("Timeout Auto-Submit (超时自动交卷)")
+    class TimeoutTests {
 
-        AnswerDetail detail = AnswerDetail.builder()
-                .id(1L).answerSheetId(1L).questionId(100L).examQuestionId(200L).build();
+        @Test
+        @DisplayName("handleTimeout should auto-submit and use frozen data for grading")
+        void handleTimeoutShouldAutoSubmitWithFrozenData() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    100L, 200L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
 
-        Question q = Question.builder()
-                .id(100L).questionType("SINGLE_CHOICE").correctAnswer("A")
-                .score(20).status("ACTIVE").build();
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .questionSnapshot(List.of(snap))
+                    .build();
 
-        ExamQuestion eq = ExamQuestion.builder()
-                .id(200L).examId(1L).questionId(100L).sortOrder(1).build();
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(100L).examQuestionId(200L)
+                    .studentAnswer("A")
+                    .correctAnswer("A").snapshotScore(20)
+                    .build();
 
-        when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
-        when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
-        when(questionMapper.selectById(100L)).thenReturn(q);
-        when(examQuestionMapper.selectById(200L)).thenReturn(eq);
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
-        examService.reportTabSwitch(1L, 1L);
+            examService.handleTimeout(1L);
 
-        // First updateById: increment tabSwitchCount to 4
-        // Second updateById (from autoGrade): set status to AUTO_SUBMITTED
-        verify(answerSheetMapper, atLeast(2)).updateById(any(AnswerSheet.class));
+            // Verify status changed to TIMED_OUT
+            verify(answerSheetMapper).updateById(argThat(s ->
+                    "TIMED_OUT".equals(s.getStatus())));
 
-        // Verify auto-submit was triggered with AUTO_SUBMITTED status
-        verify(answerSheetMapper, atLeastOnce()).updateById(argThat(s ->
-                "AUTO_SUBMITTED".equals(s.getStatus())));
+            // Redis timeout key should be cleaned
+            verify(redisTemplate).delete("exam:timeout:1");
 
-        // Redis timeout key should be cleaned up by autoGrade
-        verify(redisTemplate).delete("exam:timeout:1");
+            // Grade record should be created (all objective questions graded)
+            verify(gradeMapper).insert(any(Grade.class));
+        }
+
+        @Test
+        @DisplayName("handleTimeout should be no-op for already submitted sheet")
+        void handleTimeoutShouldNoOpForAlreadySubmitted() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("SUBMITTED").build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+
+            examService.handleTimeout(1L);
+
+            // Should not proceed with grading
+            verify(examMapper, never()).selectById(anyLong());
+            verify(answerDetailMapper, never()).selectList(any());
+        }
     }
 
-    @Test
-    @DisplayName("reportTabSwitch: should only increment count when under the limit")
-    void reportTabSwitch_shouldOnlyIncrementWhenUnderLimit() {
-        // tabSwitchCount = 1, after increment becomes 2, maxTabSwitches = 3 -> under limit
-        AnswerSheet sheet = AnswerSheet.builder()
-                .id(1L).examId(1L).studentId(1L)
-                .status("IN_PROGRESS").tabSwitchCount(1).build();
+    // ========================================================================
+    // Tab switch anti-cheat tests
+    // ========================================================================
 
-        when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
-        when(examMapper.selectById(1L)).thenReturn(publishedExam);
+    @Nested
+    @DisplayName("Tab Switch Anti-Cheat")
+    class TabSwitchTests {
 
-        examService.reportTabSwitch(1L, 1L);
+        @Test
+        @DisplayName("should auto-submit when tab switches exceed anti-cheat limit")
+        void shouldAutoSubmitWhenExceedsLimit() {
+            AnswerSheet.QuestionSnapshot snap = buildSnapshot(
+                    100L, 200L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
 
-        // Only one updateById call (increment tabSwitchCount), no auto-submit
-        verify(answerSheetMapper, times(1)).updateById(any(AnswerSheet.class));
-        verify(answerSheetMapper, never()).updateById(argThat(s ->
-                "AUTO_SUBMITTED".equals(s.getStatus())));
-        verify(answerDetailMapper, never()).selectList(any());
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L)
+                    .status("IN_PROGRESS").tabSwitchCount(3)
+                    .questionSnapshot(List.of(snap))
+                    .build();
+
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(1L).answerSheetId(1L).questionId(100L).examQuestionId(200L)
+                    .correctAnswer("A").snapshotScore(20)
+                    .build();
+
+            when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
+
+            examService.reportTabSwitch(1L, 1L);
+
+            verify(answerSheetMapper, atLeastOnce()).updateById(argThat(s ->
+                    "AUTO_SUBMITTED".equals(s.getStatus())));
+            verify(redisTemplate).delete("exam:timeout:1");
+        }
+
+        @Test
+        @DisplayName("should only increment count when under the limit")
+        void shouldOnlyIncrementWhenUnderLimit() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L)
+                    .status("IN_PROGRESS").tabSwitchCount(1).build();
+
+            when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+
+            examService.reportTabSwitch(1L, 1L);
+
+            verify(answerSheetMapper, times(1)).updateById(any(AnswerSheet.class));
+            verify(answerDetailMapper, never()).selectList(any());
+        }
     }
 }

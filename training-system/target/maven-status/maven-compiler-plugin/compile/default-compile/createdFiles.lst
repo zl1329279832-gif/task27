@@ -21,6 +21,7 @@ com\training\entity\dto\AuthResponse.class
 com\training\mapper\QuestionMapper.class
 com\training\entity\AnswerDetail$AnswerDetailBuilder.class
 com\training\entity\dto\ExamRequest.class
+com\training\entity\AnswerSheet$QuestionSnapshot$QuestionSnapshotBuilder.class
 com\training\mapper\AnswerDetailMapper.class
 com\training\service\AnswerSheetService.class
 com\training\entity\Question.class
@@ -87,6 +88,7 @@ com\training\scheduler\ExamTimeoutScheduler.class
 com\training\entity\dto\CertificateIssueRequest.class
 com\training\service\CoursewareService.class
 com\training\util\FileStorageUtil.class
+com\training\entity\AnswerSheet$QuestionSnapshot.class
 com\training\config\MyBatisPlusConfig$1.class
 com\training\controller\ExamController.class
 com\training\config\SecurityConfig.class

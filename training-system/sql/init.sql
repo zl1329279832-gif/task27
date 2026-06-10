@@ -203,6 +203,7 @@ CREATE TABLE answer_sheet (
     score DECIMAL(5,1),
     pass TINYINT,
     grading_completed_at DATETIME,
+    question_snapshot JSON COMMENT 'Frozen question data at exam start',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_exam_student_attempt (exam_id, student_id, attempt_no),
     INDEX idx_student (student_id)
@@ -217,6 +218,8 @@ CREATE TABLE answer_detail (
     question_id BIGINT NOT NULL,
     exam_question_id BIGINT,
     student_answer TEXT,
+    correct_answer TEXT COMMENT 'Frozen correct answer at exam start',
+    snapshot_score INT COMMENT 'Frozen question score at exam start',
     is_correct TINYINT,
     score_earned DECIMAL(5,1),
     grading_note TEXT,

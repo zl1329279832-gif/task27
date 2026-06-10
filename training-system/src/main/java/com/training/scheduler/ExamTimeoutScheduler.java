@@ -2,7 +2,9 @@ package com.training.scheduler;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.training.entity.AnswerSheet;
+import com.training.entity.Exam;
 import com.training.mapper.AnswerSheetMapper;
+import com.training.mapper.ExamMapper;
 import com.training.service.ExamService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +18,9 @@ import java.util.List;
  * Scheduled task to handle exam timeouts.
  * Scans for IN_PROGRESS answer sheets that have exceeded their time limit
  * and auto-submits them.
+ *
+ * Timeout is calculated from startTime + exam.durationMinutes,
+ * NOT from the stale remainingSeconds field which is only set once at exam start.
  */
 @Slf4j
 @Component
@@ -23,6 +28,7 @@ import java.util.List;
 public class ExamTimeoutScheduler {
 
     private final AnswerSheetMapper answerSheetMapper;
+    private final ExamMapper examMapper;
     private final ExamService examService;
 
     @Scheduled(fixedRate = 60000) // Every 60 seconds
@@ -32,18 +38,23 @@ public class ExamTimeoutScheduler {
                         .eq(AnswerSheet::getStatus, "IN_PROGRESS"));
 
         for (AnswerSheet sheet : inProgressSheets) {
-            if (sheet.getStartTime() != null && sheet.getRemainingSeconds() != null) {
-                long elapsed = java.time.Duration.between(sheet.getStartTime(), LocalDateTime.now()).getSeconds();
-                long totalAllowed = sheet.getRemainingSeconds() + elapsed;
+            if (sheet.getStartTime() == null) continue;
 
-                // If the remaining time has been exceeded
-                if (elapsed > sheet.getRemainingSeconds()) {
-                    log.info("Auto-submitting timed-out answer sheet: {}", sheet.getId());
-                    try {
-                        examService.handleTimeout(sheet.getId());
-                    } catch (Exception e) {
-                        log.error("Failed to auto-submit answer sheet {}: {}", sheet.getId(), e.getMessage());
-                    }
+            Exam exam = examMapper.selectById(sheet.getExamId());
+            if (exam == null) continue;
+
+            // Compute the absolute deadline: startTime + durationMinutes
+            LocalDateTime deadline = sheet.getStartTime()
+                    .plusMinutes(exam.getDurationMinutes());
+
+            if (LocalDateTime.now().isAfter(deadline)) {
+                log.info("Auto-submitting timed-out answer sheet: {} (deadline: {})",
+                        sheet.getId(), deadline);
+                try {
+                    examService.handleTimeout(sheet.getId());
+                } catch (Exception e) {
+                    log.error("Failed to auto-submit answer sheet {}: {}",
+                            sheet.getId(), e.getMessage());
                 }
             }
         }
