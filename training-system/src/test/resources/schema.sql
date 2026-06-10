@@ -106,7 +106,12 @@ CREATE TABLE IF NOT EXISTS answer_detail (
     student_answer VARCHAR(1000),
     is_correct INT,
     score_earned DECIMAL(10,2),
-    grading_note VARCHAR(500)
+    grading_note VARCHAR(500),
+    snapshot_content TEXT,
+    snapshot_options TEXT,
+    snapshot_correct_answer VARCHAR(500),
+    snapshot_question_type VARCHAR(50),
+    snapshot_score INT
 );
 
 CREATE TABLE IF NOT EXISTS grade (

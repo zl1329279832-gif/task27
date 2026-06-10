@@ -2,5 +2,6 @@ com\training\ControllerIntegrationTest.class
 com\training\JwtTokenProviderTest.class
 com\training\CertificateServiceTest.class
 com\training\ExamServiceTest.class
+com\training\ExamTimeoutSchedulerTest.class
 com\training\ControllerIntegrationTest$MockRedisConfig.class
 com\training\LearningRecordServiceTest.class

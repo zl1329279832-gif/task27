@@ -132,11 +132,13 @@ public class CertificateServiceImpl implements CertificateService {
         if (cert == null) throw new BusinessException("证书不存在");
         if ("REVOKED".equals(cert.getStatus())) throw new BusinessException("证书已被撤销");
 
-        // Update certificate status
+        // Update certificate status and invalidate verify token
         cert.setStatus("REVOKED");
         cert.setRevokeReason(req.getReason());
         cert.setRevokedBy(operatorId);
         cert.setRevokedAt(LocalDateTime.now());
+        cert.setVerifyToken(null);
+        cert.setVerifyTokenExpiresAt(null);
         certificateMapper.updateById(cert);
 
         // Create revocation record

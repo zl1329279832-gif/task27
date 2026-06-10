@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.training.ExamServiceTest" time="0.53" tests="14" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.training.ExamTimeoutSchedulerTest" time="0.105" tests="6" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="17"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -63,18 +63,21 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="61.0"/>
   </properties>
-  <testcase name="startExam_shouldThrowWhenMaxAttemptsExceeded" classname="com.training.ExamServiceTest" time="0.315"/>
-  <testcase name="startExam_shouldCreateAnswerSheetAndSnapshotQuestions" classname="com.training.ExamServiceTest" time="0.066"/>
-  <testcase name="reportTabSwitch_shouldAutoSubmitWithSnapshotWhenExceedsLimit" classname="com.training.ExamServiceTest" time="0.026"/>
-  <testcase name="startExam_shouldUseScoreOverrideInSnapshot" classname="com.training.ExamServiceTest" time="0.005"/>
-  <testcase name="submitExam_repeatedSubmissionReturnsExistingWithoutReScoring" classname="com.training.ExamServiceTest" time="0.021"/>
-  <testcase name="submitExam_shouldAutoGradeUsingSnapshotData" classname="com.training.ExamServiceTest" time="0.008"/>
-  <testcase name="handleTimeout_shouldSkipAlreadySubmittedSheets" classname="com.training.ExamServiceTest" time="0.004"/>
-  <testcase name="submitExam_timedOutSheetCannotBeReSubmitted" classname="com.training.ExamServiceTest" time="0.007"/>
-  <testcase name="handleTimeout_shouldAutoGradeWithTimedOutStatus" classname="com.training.ExamServiceTest" time="0.009"/>
-  <testcase name="startExam_shouldResumeUsingSnapshotData" classname="com.training.ExamServiceTest" time="0.031"/>
-  <testcase name="startExam_resumeShouldShowSnapshotAfterQuestionDeleted" classname="com.training.ExamServiceTest" time="0.004"/>
-  <testcase name="submitExam_snapshotImmutableToQuestionModifications" classname="com.training.ExamServiceTest" time="0.004"/>
-  <testcase name="submitExam_concurrentDuplicateReturnsSheetWithoutReScoring" classname="com.training.ExamServiceTest" time="0.005"/>
-  <testcase name="reportTabSwitch_shouldOnlyIncrementWhenUnderLimit" classname="com.training.ExamServiceTest" time="0.012"/>
+  <testcase name="shouldSkipSheetsWithNullFields" classname="com.training.ExamTimeoutSchedulerTest" time="0.076"/>
+  <testcase name="shouldDoNothingWhenNoInProgressSheets" classname="com.training.ExamTimeoutSchedulerTest" time="0.001"/>
+  <testcase name="shouldNotHandleSheetsWithinTimeLimit" classname="com.training.ExamTimeoutSchedulerTest" time="0.002"/>
+  <testcase name="shouldHandleExceptionGracefully" classname="com.training.ExamTimeoutSchedulerTest" time="0.014">
+    <system-out><![CDATA[2026-06-10T18:53:46.794+08:00  INFO 5432 --- [           main] c.t.scheduler.ExamTimeoutScheduler       : Auto-submitting timed-out answer sheet: 1
+2026-06-10T18:53:46.799+08:00 ERROR 5432 --- [           main] c.t.scheduler.ExamTimeoutScheduler       : Failed to auto-submit answer sheet 1: DB error
+2026-06-10T18:53:46.799+08:00  INFO 5432 --- [           main] c.t.scheduler.ExamTimeoutScheduler       : Auto-submitting timed-out answer sheet: 2
+]]></system-out>
+  </testcase>
+  <testcase name="shouldHandleTimedOutSheets" classname="com.training.ExamTimeoutSchedulerTest" time="0.004">
+    <system-out><![CDATA[2026-06-10T18:53:46.803+08:00  INFO 5432 --- [           main] c.t.scheduler.ExamTimeoutScheduler       : Auto-submitting timed-out answer sheet: 1
+]]></system-out>
+  </testcase>
+  <testcase name="shouldHandleMixedSheets" classname="com.training.ExamTimeoutSchedulerTest" time="0.003">
+    <system-out><![CDATA[2026-06-10T18:53:46.808+08:00  INFO 5432 --- [           main] c.t.scheduler.ExamTimeoutScheduler       : Auto-submitting timed-out answer sheet: 1
+]]></system-out>
+  </testcase>
 </testsuite>

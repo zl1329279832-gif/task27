@@ -227,21 +227,28 @@ public class ExamServiceImpl implements ExamService {
             Question q = questionMapper.selectById(eq.getQuestionId());
             if (q == null || "DELETED".equals(q.getStatus())) continue;
 
+            int effectiveScore = eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore();
+
             questionItems.add(ExamStartResponse.QuestionItem.builder()
                     .examQuestionId(eq.getId())
                     .questionId(q.getId())
                     .content(q.getContent())
                     .questionType(q.getQuestionType())
                     .options(q.getOptions())
-                    .score(eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore())
+                    .score(effectiveScore)
                     .sortOrder(eq.getSortOrder())
                     .build());
 
-            // Create answer detail placeholder
+            // Create answer detail with frozen question snapshot
             AnswerDetail detail = AnswerDetail.builder()
                     .answerSheetId(sheet.getId())
                     .questionId(q.getId())
                     .examQuestionId(eq.getId())
+                    .snapshotContent(q.getContent())
+                    .snapshotOptions(q.getOptions())
+                    .snapshotCorrectAnswer(q.getCorrectAnswer())
+                    .snapshotQuestionType(q.getQuestionType())
+                    .snapshotScore(effectiveScore)
                     .build();
             answerDetailMapper.insert(detail);
         }
@@ -258,7 +265,7 @@ public class ExamServiceImpl implements ExamService {
     }
 
     private ExamStartResponse buildResumeResponse(AnswerSheet sheet, Exam exam) {
-        // Get existing answers
+        // Get existing answers with frozen snapshots
         List<AnswerDetail> details = answerDetailMapper.selectList(
                 new LambdaQueryWrapper<AnswerDetail>()
                         .eq(AnswerDetail::getAnswerSheetId, sheet.getId()));
@@ -267,22 +274,15 @@ public class ExamServiceImpl implements ExamService {
         List<ExamStartResponse.AnswerItem> answerItems = new ArrayList<>();
 
         for (AnswerDetail detail : details) {
-            Question q = questionMapper.selectById(detail.getQuestionId());
-            if (q == null) continue;
-
-            ExamQuestion eq = null;
-            if (detail.getExamQuestionId() != null) {
-                eq = examQuestionMapper.selectById(detail.getExamQuestionId());
-            }
-
+            // Use snapshot data — never re-read from the live question table
             questionItems.add(ExamStartResponse.QuestionItem.builder()
                     .examQuestionId(detail.getExamQuestionId())
-                    .questionId(q.getId())
-                    .content(q.getContent())
-                    .questionType(q.getQuestionType())
-                    .options(q.getOptions())
-                    .score(eq != null && eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore())
-                    .sortOrder(eq != null ? eq.getSortOrder() : 0)
+                    .questionId(detail.getQuestionId())
+                    .content(detail.getSnapshotContent())
+                    .questionType(detail.getSnapshotQuestionType())
+                    .options(detail.getSnapshotOptions())
+                    .score(detail.getSnapshotScore())
+                    .sortOrder(0)
                     .build());
 
             if (detail.getStudentAnswer() != null) {
@@ -319,14 +319,19 @@ public class ExamServiceImpl implements ExamService {
         AnswerSheet sheet = answerSheetMapper.selectById(req.getAnswerSheetId());
         if (sheet == null) throw new BusinessException("答卷不存在");
         if (!sheet.getStudentId().equals(studentId)) throw new BusinessException("无权操作此答卷");
-        if (!"IN_PROGRESS".equals(sheet.getStatus()))
-            throw new BusinessException("答卷已提交或已超时，不能重复提交");
 
-        // Idempotent check via Redis
+        // Primary guard: status check prevents any re-grading of already-finished sheets
+        if (!"IN_PROGRESS".equals(sheet.getStatus())) {
+            // Return the existing sheet — no re-scoring
+            return sheet;
+        }
+
+        // Secondary guard: Redis-based deduplication for concurrent submissions
         String idempotentKey = "submit:" + sheet.getExamId() + ":" + studentId + ":" + sheet.getAttemptNo();
         Boolean isFirst = redisTemplate.opsForValue().setIfAbsent(idempotentKey, "1", 30, TimeUnit.SECONDS);
         if (isFirst != null && !isFirst) {
-            throw new BusinessException("请勿重复提交答卷");
+            // Return the existing sheet — concurrent duplicate
+            return sheet;
         }
 
         Exam exam = examMapper.selectById(sheet.getExamId());
@@ -361,27 +366,21 @@ public class ExamServiceImpl implements ExamService {
         boolean allGraded = true;
 
         for (AnswerDetail detail : details) {
-            Question question = questionMapper.selectById(detail.getQuestionId());
-            if (question == null || "DELETED".equals(question.getStatus())) {
-                // Deleted question - give full score
-                ExamQuestion eq = detail.getExamQuestionId() != null ?
-                        examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-                int qScore = (eq != null && eq.getScoreOverride() != null) ?
-                        eq.getScoreOverride() : (question != null ? question.getScore() : 10);
+            // Use snapshot data for grading — never read live question table
+            String questionType = detail.getSnapshotQuestionType();
+            String correctAnswer = detail.getSnapshotCorrectAnswer();
+            int qScore = detail.getSnapshotScore() != null ? detail.getSnapshotScore() : 10;
+
+            if (questionType == null || correctAnswer == null) {
+                // Snapshot missing (legacy data) — give full score
                 detail.setIsCorrect(1);
                 detail.setScoreEarned((double) qScore);
-                detail.setGradingNote("题目已删除，自动给满分");
+                detail.setGradingNote("快照数据缺失，自动给满分");
                 answerDetailMapper.updateById(detail);
                 totalScore += qScore;
                 continue;
             }
 
-            ExamQuestion eq = detail.getExamQuestionId() != null ?
-                    examQuestionMapper.selectById(detail.getExamQuestionId()) : null;
-            int qScore = (eq != null && eq.getScoreOverride() != null) ?
-                    eq.getScoreOverride() : question.getScore();
-
-            String questionType = question.getQuestionType();
             if ("SHORT_ANSWER".equals(questionType)) {
                 // Subjective - needs manual grading
                 detail.setGradingNote("待人工批改");
@@ -394,7 +393,7 @@ public class ExamServiceImpl implements ExamService {
             boolean isCorrect = false;
             if (detail.getStudentAnswer() != null) {
                 String studentAns = detail.getStudentAnswer().trim();
-                String correctAns = question.getCorrectAnswer().trim();
+                String correctAns = correctAnswer.trim();
 
                 if ("MULTI_CHOICE".equals(questionType)) {
                     // Sort and compare for multi-choice

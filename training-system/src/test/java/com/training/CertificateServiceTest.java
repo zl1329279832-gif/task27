@@ -145,7 +145,6 @@ class CertificateServiceTest {
                 () -> certificateService.issue(req, 1L));
         assertTrue(ex.getMessage().contains("已获得"));
 
-        // Should not proceed to check completion rate or grades
         verify(learningRecordService, never()).getCompletionRate(anyLong(), anyLong());
         verify(gradeMapper, never()).selectList(any());
     }
@@ -155,8 +154,8 @@ class CertificateServiceTest {
     // ========================================================================
 
     @Test
-    @DisplayName("revoke: should update status to REVOKED and create revocation record")
-    void revoke_shouldSucceed() {
+    @DisplayName("revoke: should update status, invalidate verify token, and create revocation record")
+    void revoke_shouldInvalidateVerifyToken() {
         CertificateRevokeRequest req = new CertificateRevokeRequest();
         req.setReason("Academic dishonesty");
 
@@ -164,7 +163,6 @@ class CertificateServiceTest {
 
         certificateService.revoke(1L, req, 99L);
 
-        // Verify certificate status updated to REVOKED
         ArgumentCaptor<Certificate> certCaptor = ArgumentCaptor.forClass(Certificate.class);
         verify(certificateMapper).updateById(certCaptor.capture());
         Certificate updated = certCaptor.getValue();
@@ -172,8 +170,10 @@ class CertificateServiceTest {
         assertEquals("Academic dishonesty", updated.getRevokeReason());
         assertEquals(99L, updated.getRevokedBy());
         assertNotNull(updated.getRevokedAt());
+        // Verify token is cleared so verify links become invalid
+        assertNull(updated.getVerifyToken());
+        assertNull(updated.getVerifyTokenExpiresAt());
 
-        // Verify revocation record created
         ArgumentCaptor<CertificateRevocation> revCaptor = ArgumentCaptor.forClass(CertificateRevocation.class);
         verify(revocationMapper).insert(revCaptor.capture());
         assertEquals(1L, revCaptor.getValue().getCertificateId());
@@ -268,7 +268,6 @@ class CertificateServiceTest {
     @Test
     @DisplayName("verifyByToken: should return valid=true for a valid unexpired token")
     void verifyByToken_shouldReturnValidForValidToken() {
-        // Token expires in the future, cert is VALID
         validCert.setVerifyTokenExpiresAt(LocalDateTime.now().plusDays(5));
 
         when(certificateMapper.selectOne(any())).thenReturn(validCert);
@@ -288,6 +287,19 @@ class CertificateServiceTest {
 
         Map<String, Object> result = certificateService.verifyByToken("nonexistent-token");
 
+        assertFalse((Boolean) result.get("valid"));
+        assertEquals("验证链接无效", result.get("message"));
+    }
+
+    @Test
+    @DisplayName("verifyByToken: revoked cert's token is cleared so verify link returns invalid")
+    void verifyByToken_revokedCertTokenClearedReturnsInvalid() {
+        // After revocation, token is set to null, so selectOne returns null for that token
+        when(certificateMapper.selectOne(any())).thenReturn(null);
+
+        Map<String, Object> result = certificateService.verifyByToken("abc123token456");
+
+        // The old token no longer resolves — treated as non-existent
         assertFalse((Boolean) result.get("valid"));
         assertEquals("验证链接无效", result.get("message"));
     }

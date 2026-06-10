@@ -34,9 +34,8 @@ public class ExamTimeoutScheduler {
         for (AnswerSheet sheet : inProgressSheets) {
             if (sheet.getStartTime() != null && sheet.getRemainingSeconds() != null) {
                 long elapsed = java.time.Duration.between(sheet.getStartTime(), LocalDateTime.now()).getSeconds();
-                long totalAllowed = sheet.getRemainingSeconds() + elapsed;
 
-                // If the remaining time has been exceeded
+                // If elapsed time exceeds the exam duration (remainingSeconds holds the original duration)
                 if (elapsed > sheet.getRemainingSeconds()) {
                     log.info("Auto-submitting timed-out answer sheet: {}", sheet.getId());
                     try {
