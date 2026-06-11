@@ -72,6 +72,12 @@ class ExamServiceTest {
                 .build();
     }
 
+    /** Helper: stub all Redis lock acquisitions to succeed. */
+    private void stubLockSuccess() {
+        lenient().when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
+    }
+
     // ========================================================================
     // Helper methods
     // ========================================================================
@@ -119,6 +125,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("should create answer sheet with frozen question snapshot")
         void shouldCreateAnswerSheetWithSnapshot() {
+            stubLockSuccess();
             Question q = Question.builder()
                     .id(100L)
                     .content("What is Java?")
@@ -173,6 +180,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("should throw BusinessException when max attempts exceeded")
         void shouldThrowWhenMaxAttemptsExceeded() {
+            stubLockSuccess();
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
             when(answerSheetMapper.selectCount(any())).thenReturn(3L);
 
@@ -184,6 +192,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("should throw BusinessException when exam is not published")
         void shouldThrowWhenExamNotPublished() {
+            stubLockSuccess();
             publishedExam.setStatus("DRAFT");
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
 
@@ -204,6 +213,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("resume should use frozen snapshot even when question is deleted from bank")
         void resumeShouldUseSnapshotWhenQuestionDeleted() {
+            stubLockSuccess();
             // Simulate: student started exam, then admin deleted question from bank
             AnswerSheet.QuestionSnapshot frozenSnapshot = buildSnapshot(
                     100L, 1L, "Original question content",
@@ -255,6 +265,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("resume should use frozen snapshot even when question content was modified")
         void resumeShouldUseSnapshotWhenQuestionModified() {
+            stubLockSuccess();
             // Simulate: admin changed question content after student started exam
             AnswerSheet.QuestionSnapshot frozenSnapshot = buildSnapshot(
                     100L, 1L, "Original version of question",
@@ -293,6 +304,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("resume should compute remaining time from DB when Redis TTL expired")
         void resumeShouldFallbackToDbTimeWhenRedisExpired() {
+            stubLockSuccess();
             AnswerSheet.QuestionSnapshot snap = buildSnapshot(
                     100L, 1L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
 
@@ -353,7 +365,9 @@ class ExamServiceTest {
                     .build();
 
             when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            // First setIfAbsent: session lock (true), second: idempotent check (null = first attempt)
             when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true)
                     .thenReturn(null);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
             when(answerDetailMapper.selectList(any())).thenReturn(List.of(d1));
@@ -382,7 +396,9 @@ class ExamServiceTest {
                     .status("IN_PROGRESS").build();
 
             when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
-            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+            // First setIfAbsent: session lock (success), second: idempotent check (fail)
+            when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true)
                     .thenReturn(false);
 
             AnswerSubmitRequest req = buildSubmitRequest(1L);
@@ -450,7 +466,7 @@ class ExamServiceTest {
 
             when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
             when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
-                    .thenReturn(null);
+                    .thenReturn(true).thenReturn(null);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
             when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
@@ -493,7 +509,7 @@ class ExamServiceTest {
 
             when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
             when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
-                    .thenReturn(null);
+                    .thenReturn(true).thenReturn(null);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
             when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
@@ -517,7 +533,7 @@ class ExamServiceTest {
 
             when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
             when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
-                    .thenReturn(null);
+                    .thenReturn(true).thenReturn(null);
             // Simulate exception during grading
             when(examMapper.selectById(1L)).thenThrow(new RuntimeException("DB error"));
 
@@ -541,6 +557,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("handleTimeout should auto-submit and use frozen data for grading")
         void handleTimeoutShouldAutoSubmitWithFrozenData() {
+            stubLockSuccess();
             AnswerSheet.QuestionSnapshot snap = buildSnapshot(
                     100L, 200L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
 
@@ -601,6 +618,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("should auto-submit when tab switches exceed anti-cheat limit")
         void shouldAutoSubmitWhenExceedsLimit() {
+            stubLockSuccess();
             AnswerSheet.QuestionSnapshot snap = buildSnapshot(
                     100L, 200L, "Q1", "SINGLE_CHOICE", "A", 20, 1);
 
@@ -616,6 +634,7 @@ class ExamServiceTest {
                     .build();
 
             when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
             when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
@@ -629,11 +648,13 @@ class ExamServiceTest {
         @Test
         @DisplayName("should only increment count when under the limit")
         void shouldOnlyIncrementWhenUnderLimit() {
+            stubLockSuccess();
             AnswerSheet sheet = AnswerSheet.builder()
                     .id(1L).examId(1L).studentId(1L)
                     .status("IN_PROGRESS").tabSwitchCount(1).build();
 
             when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
 
             examService.reportTabSwitch(1L, 1L);
@@ -654,6 +675,7 @@ class ExamServiceTest {
         @Test
         @DisplayName("should resume existing sheet on concurrent start instead of creating duplicate")
         void shouldResumeExistingSheetOnConcurrentStart() {
+            stubLockSuccess();
             AnswerSheet existingSheet = AnswerSheet.builder()
                     .id(100L).examId(1L).studentId(1L).attemptNo(1)
                     .status("IN_PROGRESS").startTime(LocalDateTime.now().minusMinutes(5))
@@ -676,6 +698,49 @@ class ExamServiceTest {
             assertTrue(response.getResumed());
             assertEquals(100L, response.getAnswerSheetId());
             verify(answerSheetMapper, never()).insert(any());
+        }
+
+        @Test
+        @DisplayName("CRITICAL: when start lock fails, should resume existing in-progress sheet")
+        void whenLockFailsShouldResumeExistingSheet() {
+            AnswerSheet existingSheet = AnswerSheet.builder()
+                    .id(200L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").startTime(LocalDateTime.now().minusMinutes(2))
+                    .remainingSeconds(3480).tabSwitchCount(0)
+                    .questionSnapshot(Collections.singletonList(
+                            buildSnapshot(1L, 1L, "Q1", "SINGLE_CHOICE", "A", 10, 1)))
+                    .build();
+
+            // Lock fails (another request is processing)
+            when(valueOperations.setIfAbsent(eq("exam:start:1:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+            when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(answerDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
+                    AnswerDetail.builder()
+                            .answerSheetId(200L).questionId(1L).examQuestionId(1L)
+                            .correctAnswer("A").snapshotScore(10).build()));
+            when(redisTemplate.getExpire(anyString(), any(TimeUnit.class))).thenReturn(3480L);
+
+            ExamStartResponse response = examService.startExam(1L, 1L);
+
+            assertTrue(response.getResumed());
+            assertEquals(200L, response.getAnswerSheetId());
+            // Must NOT create a new answer sheet
+            verify(answerSheetMapper, never()).insert(any());
+        }
+
+        @Test
+        @DisplayName("CRITICAL: when start lock fails and no existing sheet, should throw")
+        void whenLockFailsAndNoExistingSheetShouldThrow() {
+            // Lock fails and no existing in-progress sheet
+            when(valueOperations.setIfAbsent(eq("exam:start:1:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+            when(answerSheetMapper.selectOne(any())).thenReturn(null);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.startExam(1L, 1L));
+            assertTrue(ex.getMessage().contains("重复操作"));
         }
     }
 
@@ -761,6 +826,164 @@ class ExamServiceTest {
             verify(knowledgePointMasteryService).updateMasteryFromExam(1L, 10L, 100L);
             // But remedial path should NOT be generated (student passed)
             verify(learningPathService, never()).generatePath(anyLong(), anyLong(), anyString(), any());
+        }
+    }
+
+    // ========================================================================
+    // Session lock serialization tests (submit vs timeout vs tab-switch)
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Session Lock Serialization")
+    class SessionLockTests {
+
+        @Test
+        @DisplayName("CRITICAL: submit should throw when session lock is held (timeout in progress)")
+        void submitShouldThrowWhenSessionLockHeld() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            // Session lock fails — timeout is processing this sheet
+            when(valueOperations.setIfAbsent(eq("exam:session:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.submitExam(req, 1L));
+            assertTrue(ex.getMessage().contains("正在处理中"));
+        }
+
+        @Test
+        @DisplayName("CRITICAL: submit re-reads sheet inside lock — detects auto-submitted by timeout")
+        void submitReReadDetectsAutoSubmittedByTimeout() {
+            stubLockSuccess();
+            AnswerSheet initialSheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").build();
+
+            // First selectById: initial check → IN_PROGRESS
+            // Second selectById: re-read inside lock → TIMED_OUT (timeout handler ran first)
+            AnswerSheet timedOutSheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("TIMED_OUT").build();
+
+            when(answerSheetMapper.selectById(1L))
+                    .thenReturn(initialSheet)
+                    .thenReturn(timedOutSheet);
+
+            AnswerSubmitRequest req = buildSubmitRequest(1L);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.submitExam(req, 1L));
+            assertTrue(ex.getMessage().contains("自动提交") || ex.getMessage().contains("超时"));
+        }
+
+        @Test
+        @DisplayName("CRITICAL: tab-switch should skip when session lock is held")
+        void tabSwitchShouldSkipWhenSessionLockHeld() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L)
+                    .status("IN_PROGRESS").tabSwitchCount(2).build();
+
+            when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            // Session lock fails
+            when(valueOperations.setIfAbsent(eq("exam:session:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            // Should silently return — not throw, not update
+            examService.reportTabSwitch(1L, 1L);
+
+            verify(answerSheetMapper, never()).updateById(any());
+            verify(examMapper, never()).selectById(anyLong());
+        }
+
+        @Test
+        @DisplayName("CRITICAL: timeout should skip when session lock is held (student submitting)")
+        void timeoutShouldSkipWhenSessionLockHeld() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            // Session lock fails — student is submitting
+            when(valueOperations.setIfAbsent(eq("exam:session:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            examService.handleTimeout(1L);
+
+            // Should not proceed with grading
+            verify(examMapper, never()).selectById(anyLong());
+            verify(answerDetailMapper, never()).selectList(any());
+        }
+
+        @Test
+        @DisplayName("CRITICAL: timeout re-reads sheet inside lock — detects already submitted")
+        void timeoutReReadDetectsAlreadySubmitted() {
+            stubLockSuccess();
+            AnswerSheet initialSheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").build();
+
+            // Re-read inside lock shows SUBMITTED (student submitted just in time)
+            AnswerSheet submittedSheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("SUBMITTED").build();
+
+            when(answerSheetMapper.selectById(1L))
+                    .thenReturn(initialSheet)
+                    .thenReturn(submittedSheet);
+
+            examService.handleTimeout(1L);
+
+            // Should not proceed with grading — student already submitted
+            verify(examMapper, never()).selectById(anyLong());
+            verify(answerDetailMapper, never()).selectList(any());
+        }
+
+        @Test
+        @DisplayName("tab-switch should accumulate count correctly with session lock")
+        void tabSwitchShouldAccumulateCountWithLock() {
+            stubLockSuccess();
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L)
+                    .status("IN_PROGRESS").tabSwitchCount(0).build();
+
+            when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+
+            // First tab switch
+            examService.reportTabSwitch(1L, 1L);
+
+            // Verify count was incremented to 1 (not auto-submitted, under limit of 3)
+            verify(answerSheetMapper).updateById(argThat(s ->
+                    s.getTabSwitchCount() == 1 && "IN_PROGRESS".equals(s.getStatus())));
+        }
+
+        @Test
+        @DisplayName("CRITICAL: tab-switch re-read inside lock detects already auto-submitted")
+        void tabSwitchReReadDetectsAutoSubmitted() {
+            stubLockSuccess();
+            AnswerSheet initialSheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L)
+                    .status("IN_PROGRESS").tabSwitchCount(2).build();
+
+            // Re-read inside lock shows AUTO_SUBMITTED (another tab switch just triggered it)
+            AnswerSheet autoSubmittedSheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L)
+                    .status("AUTO_SUBMITTED").tabSwitchCount(4).build();
+
+            when(answerSheetMapper.selectOne(any())).thenReturn(initialSheet);
+            when(answerSheetMapper.selectById(1L)).thenReturn(autoSubmittedSheet);
+
+            examService.reportTabSwitch(1L, 1L);
+
+            // Should NOT update — sheet is no longer IN_PROGRESS
+            verify(answerSheetMapper, never()).updateById(any());
+            verify(examMapper, never()).selectById(anyLong());
         }
     }
 }

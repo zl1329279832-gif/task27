@@ -1,3 +1,4 @@
+com\training\ExamServiceTest$SessionLockTests.class
 com\training\ExamServiceTest$TabSwitchTests.class
 com\training\MakeupExamServiceTest$StartMakeupExamTests.class
 com\training\AuditLogServiceTest$QueryTests.class

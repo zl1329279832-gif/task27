@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.training.LearningPathServiceTest$GeneratePathTests" time="0.067" tests="10" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.training.ExamServiceTest$SessionLockTests" time="0.547" tests="7" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="17"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -63,20 +63,17 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="61.0"/>
   </properties>
-  <testcase name="shouldCreateMakeupExamForMakeupExamSteps" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.008"/>
-  <testcase name="concurrentGeneratePathShouldReturnExistingWhenLockFails" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.005">
-    <system-out><![CDATA[2026-06-11T10:39:50.288+08:00 DEBUG 13360 --- [           main] c.t.s.impl.LearningPathServiceImpl       : 学习路径生成被跳过(已有并发请求正在处理): studentId=9, courseId=90
+  <testcase name="tabSwitchShouldAccumulateCountWithLock" classname="com.training.ExamServiceTest$SessionLockTests" time="0.451"/>
+  <testcase name="submitReReadDetectsAutoSubmittedByTimeout" classname="com.training.ExamServiceTest$SessionLockTests" time="0.009"/>
+  <testcase name="tabSwitchReReadDetectsAutoSubmitted" classname="com.training.ExamServiceTest$SessionLockTests" time="0.014"/>
+  <testcase name="timeoutShouldSkipWhenSessionLockHeld" classname="com.training.ExamServiceTest$SessionLockTests" time="0.018">
+    <system-out><![CDATA[2026-06-11T10:39:48.752+08:00 DEBUG 13360 --- [           main] c.training.service.impl.ExamServiceImpl  : 超时处理被跳过(答卷正在处理中): sheetId=1
 ]]></system-out>
   </testcase>
-  <testcase name="concurrentGeneratePathShouldThrowWhenNoExistingPath" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.005">
-    <system-out><![CDATA[2026-06-11T10:39:50.295+08:00 DEBUG 13360 --- [           main] c.t.s.impl.LearningPathServiceImpl       : 学习路径生成被跳过(已有并发请求正在处理): studentId=1, courseId=10
+  <testcase name="tabSwitchShouldSkipWhenSessionLockHeld" classname="com.training.ExamServiceTest$SessionLockTests" time="0.006">
+    <system-out><![CDATA[2026-06-11T10:39:48.762+08:00 DEBUG 13360 --- [           main] c.training.service.impl.ExamServiceImpl  : 切屏上报被跳过(答卷正在处理中): sheetId=1
 ]]></system-out>
   </testcase>
-  <testcase name="shouldHandleStudentWithNoRecordsGracefully" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.01"/>
-  <testcase name="shouldIncludeReviewStepsForHighTabSwitchStudents" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.009"/>
-  <testcase name="shouldExpirePreviousActivePaths" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.003"/>
-  <testcase name="shouldGeneratePathWithMakeupChaptersForUnmasteredKPs" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.004"/>
-  <testcase name="shouldGeneratePathWithMakeupExamStepWhenStudentFailed" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.003"/>
-  <testcase name="shouldCreateRemedialTaskForMakeupChapterSteps" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.006"/>
-  <testcase name="shouldWriteAuditLog" classname="com.training.LearningPathServiceTest$GeneratePathTests" time="0.003"/>
+  <testcase name="submitShouldThrowWhenSessionLockHeld" classname="com.training.ExamServiceTest$SessionLockTests" time="0.024"/>
+  <testcase name="timeoutReReadDetectsAlreadySubmitted" classname="com.training.ExamServiceTest$SessionLockTests" time="0.011"/>
 </testsuite>

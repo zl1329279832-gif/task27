@@ -161,126 +161,148 @@ public class ExamServiceImpl implements ExamService {
     @Override
     @Transactional
     public ExamStartResponse startExam(Long examId, Long studentId) {
-        Exam exam = examMapper.selectById(examId);
-        if (exam == null) throw new BusinessException("考试不存在");
-        if (!"PUBLISHED".equals(exam.getStatus())) throw new BusinessException("考试未发布");
-
-        // Check time window
-        LocalDateTime now = LocalDateTime.now();
-        if (exam.getStartTime() != null && now.isBefore(exam.getStartTime()))
-            throw new BusinessException("考试尚未开始");
-        if (exam.getEndTime() != null && now.isAfter(exam.getEndTime()))
-            throw new BusinessException("考试已结束");
-
-        // Check attempt count
-        long attemptCount = answerSheetMapper.selectCount(
-                new LambdaQueryWrapper<AnswerSheet>()
-                        .eq(AnswerSheet::getExamId, examId)
-                        .eq(AnswerSheet::getStudentId, studentId)
-                        .ne(AnswerSheet::getStatus, "IN_PROGRESS"));
-        if (attemptCount >= exam.getMaxAttempts())
-            throw new BusinessException("已达到最大考试次数: " + exam.getMaxAttempts());
-
-        // Check for in-progress answer sheet (resume/breakpoint)
-        AnswerSheet existingSheet = answerSheetMapper.selectOne(
-                new LambdaQueryWrapper<AnswerSheet>()
-                        .eq(AnswerSheet::getExamId, examId)
-                        .eq(AnswerSheet::getStudentId, studentId)
-                        .eq(AnswerSheet::getStatus, "IN_PROGRESS"));
-
-        if (existingSheet != null) {
-            // Resume exam - use frozen snapshot, NOT live question data
-            return buildResumeResponse(existingSheet, exam);
+        // Distributed lock to prevent concurrent exam starts for the same student+exam
+        String startLockKey = "exam:start:" + examId + ":" + studentId;
+        Boolean startLocked = redisTemplate.opsForValue()
+                .setIfAbsent(startLockKey, "1", 10, TimeUnit.SECONDS);
+        if (startLocked == null || !startLocked) {
+            // Another request is processing — check for existing in-progress sheet
+            AnswerSheet concurrentSheet = answerSheetMapper.selectOne(
+                    new LambdaQueryWrapper<AnswerSheet>()
+                            .eq(AnswerSheet::getExamId, examId)
+                            .eq(AnswerSheet::getStudentId, studentId)
+                            .eq(AnswerSheet::getStatus, "IN_PROGRESS"));
+            if (concurrentSheet != null) {
+                Exam exam = examMapper.selectById(examId);
+                return buildResumeResponse(concurrentSheet, exam);
+            }
+            throw new BusinessException("正在处理开考请求，请勿重复操作");
         }
 
-        // Create new attempt
-        int attemptNo = (int) attemptCount + 1;
-        int remainingSeconds = exam.getDurationMinutes() * 60;
+        try {
+            Exam exam = examMapper.selectById(examId);
+            if (exam == null) throw new BusinessException("考试不存在");
+            if (!"PUBLISHED".equals(exam.getStatus())) throw new BusinessException("考试未发布");
 
-        AnswerSheet sheet = AnswerSheet.builder()
-                .examId(examId)
-                .studentId(studentId)
-                .attemptNo(attemptNo)
-                .status("IN_PROGRESS")
-                .startTime(now)
-                .remainingSeconds(remainingSeconds)
-                .tabSwitchCount(0)
-                .build();
-        answerSheetMapper.insert(sheet);
+            // Check time window
+            LocalDateTime now = LocalDateTime.now();
+            if (exam.getStartTime() != null && now.isBefore(exam.getStartTime()))
+                throw new BusinessException("考试尚未开始");
+            if (exam.getEndTime() != null && now.isAfter(exam.getEndTime()))
+                throw new BusinessException("考试已结束");
 
-        // Set Redis timeout key
-        String timeoutKey = "exam:timeout:" + sheet.getId();
-        redisTemplate.opsForValue().set(timeoutKey, "1", remainingSeconds, TimeUnit.SECONDS);
+            // Check attempt count
+            long attemptCount = answerSheetMapper.selectCount(
+                    new LambdaQueryWrapper<AnswerSheet>()
+                            .eq(AnswerSheet::getExamId, examId)
+                            .eq(AnswerSheet::getStudentId, studentId)
+                            .ne(AnswerSheet::getStatus, "IN_PROGRESS"));
+            if (attemptCount >= exam.getMaxAttempts())
+                throw new BusinessException("已达到最大考试次数: " + exam.getMaxAttempts());
 
-        // Build question list and freeze snapshot
-        List<ExamQuestion> examQuestions = examQuestionMapper.selectList(
-                new LambdaQueryWrapper<ExamQuestion>()
-                        .eq(ExamQuestion::getExamId, examId)
-                        .orderByAsc(ExamQuestion::getSortOrder));
+            // Check for in-progress answer sheet (resume/breakpoint)
+            AnswerSheet existingSheet = answerSheetMapper.selectOne(
+                    new LambdaQueryWrapper<AnswerSheet>()
+                            .eq(AnswerSheet::getExamId, examId)
+                            .eq(AnswerSheet::getStudentId, studentId)
+                            .eq(AnswerSheet::getStatus, "IN_PROGRESS"));
 
-        // Handle randomization
-        if (exam.getRandomize() == 1 && exam.getQuestionCount() > 0
-                && exam.getQuestionCount() < examQuestions.size()) {
-            Collections.shuffle(examQuestions);
-            examQuestions = examQuestions.subList(0, exam.getQuestionCount());
-        }
+            if (existingSheet != null) {
+                // Resume exam - use frozen snapshot, NOT live question data
+                return buildResumeResponse(existingSheet, exam);
+            }
 
-        List<AnswerSheet.QuestionSnapshot> snapshots = new ArrayList<>();
-        List<ExamStartResponse.QuestionItem> questionItems = new ArrayList<>();
+            // Create new attempt
+            int attemptNo = (int) attemptCount + 1;
+            int remainingSeconds = exam.getDurationMinutes() * 60;
 
-        for (ExamQuestion eq : examQuestions) {
-            Question q = questionMapper.selectById(eq.getQuestionId());
-            if (q == null || "DELETED".equals(q.getStatus())) continue;
-
-            int qScore = eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore();
-
-            // Freeze question data into snapshot
-            AnswerSheet.QuestionSnapshot snapshot = AnswerSheet.QuestionSnapshot.builder()
-                    .questionId(q.getId())
-                    .examQuestionId(eq.getId())
-                    .content(q.getContent())
-                    .questionType(q.getQuestionType())
-                    .options(q.getOptions())
-                    .correctAnswer(q.getCorrectAnswer())
-                    .score(qScore)
-                    .sortOrder(eq.getSortOrder())
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .examId(examId)
+                    .studentId(studentId)
+                    .attemptNo(attemptNo)
+                    .status("IN_PROGRESS")
+                    .startTime(now)
+                    .remainingSeconds(remainingSeconds)
+                    .tabSwitchCount(0)
                     .build();
-            snapshots.add(snapshot);
+            answerSheetMapper.insert(sheet);
 
-            questionItems.add(ExamStartResponse.QuestionItem.builder()
-                    .examQuestionId(eq.getId())
-                    .questionId(q.getId())
-                    .content(q.getContent())
-                    .questionType(q.getQuestionType())
-                    .options(q.getOptions())
-                    .score(qScore)
-                    .sortOrder(eq.getSortOrder())
-                    .build());
+            // Set Redis timeout key
+            String timeoutKey = "exam:timeout:" + sheet.getId();
+            redisTemplate.opsForValue().set(timeoutKey, "1", remainingSeconds, TimeUnit.SECONDS);
 
-            // Create answer detail with frozen correctAnswer and score
-            AnswerDetail detail = AnswerDetail.builder()
+            // Build question list and freeze snapshot
+            List<ExamQuestion> examQuestions = examQuestionMapper.selectList(
+                    new LambdaQueryWrapper<ExamQuestion>()
+                            .eq(ExamQuestion::getExamId, examId)
+                            .orderByAsc(ExamQuestion::getSortOrder));
+
+            // Handle randomization
+            if (exam.getRandomize() == 1 && exam.getQuestionCount() > 0
+                    && exam.getQuestionCount() < examQuestions.size()) {
+                Collections.shuffle(examQuestions);
+                examQuestions = examQuestions.subList(0, exam.getQuestionCount());
+            }
+
+            List<AnswerSheet.QuestionSnapshot> snapshots = new ArrayList<>();
+            List<ExamStartResponse.QuestionItem> questionItems = new ArrayList<>();
+
+            for (ExamQuestion eq : examQuestions) {
+                Question q = questionMapper.selectById(eq.getQuestionId());
+                if (q == null || "DELETED".equals(q.getStatus())) continue;
+
+                int qScore = eq.getScoreOverride() != null ? eq.getScoreOverride() : q.getScore();
+
+                // Freeze question data into snapshot
+                AnswerSheet.QuestionSnapshot snapshot = AnswerSheet.QuestionSnapshot.builder()
+                        .questionId(q.getId())
+                        .examQuestionId(eq.getId())
+                        .content(q.getContent())
+                        .questionType(q.getQuestionType())
+                        .options(q.getOptions())
+                        .correctAnswer(q.getCorrectAnswer())
+                        .score(qScore)
+                        .sortOrder(eq.getSortOrder())
+                        .build();
+                snapshots.add(snapshot);
+
+                questionItems.add(ExamStartResponse.QuestionItem.builder()
+                        .examQuestionId(eq.getId())
+                        .questionId(q.getId())
+                        .content(q.getContent())
+                        .questionType(q.getQuestionType())
+                        .options(q.getOptions())
+                        .score(qScore)
+                        .sortOrder(eq.getSortOrder())
+                        .build());
+
+                // Create answer detail with frozen correctAnswer and score
+                AnswerDetail detail = AnswerDetail.builder()
+                        .answerSheetId(sheet.getId())
+                        .questionId(q.getId())
+                        .examQuestionId(eq.getId())
+                        .correctAnswer(q.getCorrectAnswer())
+                        .snapshotScore(qScore)
+                        .build();
+                answerDetailMapper.insert(detail);
+            }
+
+            // Persist the frozen snapshot on the answer sheet
+            sheet.setQuestionSnapshot(snapshots);
+            answerSheetMapper.updateById(sheet);
+
+            return ExamStartResponse.builder()
                     .answerSheetId(sheet.getId())
-                    .questionId(q.getId())
-                    .examQuestionId(eq.getId())
-                    .correctAnswer(q.getCorrectAnswer())
-                    .snapshotScore(qScore)
+                    .attemptNo(attemptNo)
+                    .remainingSeconds(remainingSeconds)
+                    .totalQuestions(questionItems.size())
+                    .resumed(false)
+                    .questions(questionItems)
+                    .existingAnswers(Collections.emptyList())
                     .build();
-            answerDetailMapper.insert(detail);
+        } finally {
+            redisTemplate.delete(startLockKey);
         }
-
-        // Persist the frozen snapshot on the answer sheet
-        sheet.setQuestionSnapshot(snapshots);
-        answerSheetMapper.updateById(sheet);
-
-        return ExamStartResponse.builder()
-                .answerSheetId(sheet.getId())
-                .attemptNo(attemptNo)
-                .remainingSeconds(remainingSeconds)
-                .totalQuestions(questionItems.size())
-                .resumed(false)
-                .questions(questionItems)
-                .existingAnswers(Collections.emptyList())
-                .build();
     }
 
     /**
@@ -369,15 +391,31 @@ public class ExamServiceImpl implements ExamService {
         if (!"IN_PROGRESS".equals(sheet.getStatus()))
             throw new BusinessException("答卷已提交或已超时，不能重复提交");
 
+        // Session lock — serialize submit, timeout, and tab-switch auto-submit
+        String sessionLockKey = "exam:session:" + sheet.getId();
+        Boolean sessionLocked = redisTemplate.opsForValue()
+                .setIfAbsent(sessionLockKey, "1", 30, TimeUnit.SECONDS);
+        if (sessionLocked == null || !sessionLocked) {
+            throw new BusinessException("答卷正在处理中，请勿重复操作");
+        }
+
         // Idempotent check via Redis — clean up on failure so student can retry
         String idempotentKey = "submit:" + sheet.getExamId() + ":" + studentId + ":" + sheet.getAttemptNo();
         Boolean isFirst = redisTemplate.opsForValue().setIfAbsent(idempotentKey, "1", 30, TimeUnit.SECONDS);
         if (isFirst != null && !isFirst) {
+            redisTemplate.delete(sessionLockKey);
             throw new BusinessException("请勿重复提交答卷");
         }
 
         Exam exam;
         try {
+            // Re-check status inside lock — may have been changed by timeout/tab-switch
+            AnswerSheet freshSheet = answerSheetMapper.selectById(sheet.getId());
+            if (freshSheet == null || !"IN_PROGRESS".equals(freshSheet.getStatus())) {
+                redisTemplate.delete(idempotentKey);
+                throw new BusinessException("答卷已被系统自动提交或超时处理");
+            }
+
             exam = examMapper.selectById(sheet.getExamId());
 
             // Save answers
@@ -399,10 +437,14 @@ public class ExamServiceImpl implements ExamService {
 
             // Auto-grade using frozen snapshot data
             return autoGrade(sheet, exam, "SUBMITTED");
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
             // On grading failure, remove idempotent key so student can retry
             redisTemplate.delete(idempotentKey);
             throw e;
+        } finally {
+            redisTemplate.delete(sessionLockKey);
         }
     }
 
@@ -554,14 +596,31 @@ public class ExamServiceImpl implements ExamService {
                         .eq(AnswerSheet::getStatus, "IN_PROGRESS"));
         if (sheet == null) return;
 
-        Exam exam = examMapper.selectById(examId);
-        sheet.setTabSwitchCount(sheet.getTabSwitchCount() + 1);
-        answerSheetMapper.updateById(sheet);
+        // Session lock — serialize with submit and timeout
+        String sessionLockKey = "exam:session:" + sheet.getId();
+        Boolean sessionLocked = redisTemplate.opsForValue()
+                .setIfAbsent(sessionLockKey, "1", 30, TimeUnit.SECONDS);
+        if (sessionLocked == null || !sessionLocked) {
+            log.debug("切屏上报被跳过(答卷正在处理中): sheetId={}", sheet.getId());
+            return;
+        }
 
-        // Auto-submit if exceeds max tab switches
-        if (exam.getAntiCheatEnabled() == 1
-                && sheet.getTabSwitchCount() > exam.getMaxTabSwitches()) {
-            autoGrade(sheet, exam, "AUTO_SUBMITTED");
+        try {
+            // Re-check status inside lock
+            AnswerSheet freshSheet = answerSheetMapper.selectById(sheet.getId());
+            if (freshSheet == null || !"IN_PROGRESS".equals(freshSheet.getStatus())) return;
+
+            Exam exam = examMapper.selectById(examId);
+            freshSheet.setTabSwitchCount(freshSheet.getTabSwitchCount() + 1);
+            answerSheetMapper.updateById(freshSheet);
+
+            // Auto-submit if exceeds max tab switches
+            if (exam.getAntiCheatEnabled() == 1
+                    && freshSheet.getTabSwitchCount() > exam.getMaxTabSwitches()) {
+                autoGrade(freshSheet, exam, "AUTO_SUBMITTED");
+            }
+        } finally {
+            redisTemplate.delete(sessionLockKey);
         }
     }
 
@@ -571,7 +630,24 @@ public class ExamServiceImpl implements ExamService {
         AnswerSheet sheet = answerSheetMapper.selectById(answerSheetId);
         if (sheet == null || !"IN_PROGRESS".equals(sheet.getStatus())) return;
 
-        Exam exam = examMapper.selectById(sheet.getExamId());
-        autoGrade(sheet, exam, "TIMED_OUT");
+        // Session lock — serialize with submit and tab-switch auto-submit
+        String sessionLockKey = "exam:session:" + answerSheetId;
+        Boolean sessionLocked = redisTemplate.opsForValue()
+                .setIfAbsent(sessionLockKey, "1", 30, TimeUnit.SECONDS);
+        if (sessionLocked == null || !sessionLocked) {
+            log.debug("超时处理被跳过(答卷正在处理中): sheetId={}", answerSheetId);
+            return;
+        }
+
+        try {
+            // Re-check status inside lock — may have been submitted by student
+            AnswerSheet freshSheet = answerSheetMapper.selectById(answerSheetId);
+            if (freshSheet == null || !"IN_PROGRESS".equals(freshSheet.getStatus())) return;
+
+            Exam exam = examMapper.selectById(freshSheet.getExamId());
+            autoGrade(freshSheet, exam, "TIMED_OUT");
+        } finally {
+            redisTemplate.delete(sessionLockKey);
+        }
     }
 }

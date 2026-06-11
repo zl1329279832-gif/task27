@@ -9,6 +9,7 @@ import com.training.service.AuditLogService;
 import com.training.service.KnowledgePointMasteryService;
 import com.training.service.LearningRecordService;
 import com.training.service.impl.LearningPathServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -24,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -63,8 +67,22 @@ class LearningPathServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private RedisTemplate<String, Object> redisTemplate;
+
+    @Mock
+    private ValueOperations<String, Object> valueOperations;
+
     @InjectMocks
     private LearningPathServiceImpl learningPathService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        // Default: lock acquisition succeeds
+        lenient().when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
+    }
 
     // ========================================================================
     // generatePath tests
@@ -466,6 +484,51 @@ class LearningPathServiceTest {
 
             // Verify audit log was still written
             verify(auditLogService).log(anyString(), anyString(), any(), any(), isNull(), any(Map.class));
+        }
+
+        @Test
+        @DisplayName("CRITICAL: concurrent generatePath should return existing path when lock fails")
+        void concurrentGeneratePathShouldReturnExistingWhenLockFails() {
+            Long studentId = 9L;
+            Long courseId = 90L;
+
+            // Lock fails (another request is processing)
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            // An existing active path was just created by the other request
+            List<LearningPath.PathStep> steps = List.of(
+                    LearningPath.PathStep.builder()
+                            .stepOrder(1).stepType("MAKEUP_CHAPTER")
+                            .targetId(100L).targetTitle("Ch1").status("PENDING")
+                            .build());
+            LearningPath existingPath = LearningPath.builder()
+                    .id(50L).studentId(studentId).courseId(courseId)
+                    .status("GENERATED").pathData(steps)
+                    .totalSteps(1).completedSteps(0)
+                    .build();
+            when(learningPathMapper.selectOne(any())).thenReturn(existingPath);
+
+            LearningPath result = learningPathService.generatePath(studentId, courseId, "EXAM_FAIL", 99L);
+
+            // Should return existing path, NOT create a duplicate
+            assertNotNull(result);
+            assertEquals(50L, result.getId());
+            verify(learningPathMapper, never()).insert(any());
+            verify(remedialTaskMapper, never()).insert(any());
+        }
+
+        @Test
+        @DisplayName("CRITICAL: concurrent generatePath should throw when lock fails and no existing path")
+        void concurrentGeneratePathShouldThrowWhenNoExistingPath() {
+            // Lock fails and no existing path found
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+            when(learningPathMapper.selectOne(any())).thenReturn(null);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> learningPathService.generatePath(1L, 10L, "EXAM_FAIL", 99L));
+            assertTrue(ex.getMessage().contains("正在生成中"));
         }
     }
 

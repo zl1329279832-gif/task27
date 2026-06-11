@@ -14,12 +14,14 @@ import com.training.service.LearningRecordService;
 import com.training.service.KnowledgePointMasteryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -37,10 +39,36 @@ public class LearningPathServiceImpl implements LearningPathService {
     private final LearningRecordService learningRecordService;
     private final KnowledgePointMasteryService knowledgePointMasteryService;
     private final AuditLogService auditLogService;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     @Transactional
     public LearningPath generatePath(Long studentId, Long courseId, String triggerReason, Long operatorId) {
+        // Distributed lock to prevent concurrent path generation for the same student+course
+        String lockKey = "path:generate:" + studentId + ":" + courseId;
+        Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        if (locked == null || !locked) {
+            log.debug("学习路径生成被跳过(已有并发请求正在处理): studentId={}, courseId={}", studentId, courseId);
+            // Return existing active path if one was just created
+            LearningPath existingPath = learningPathMapper.selectOne(
+                    new LambdaQueryWrapper<LearningPath>()
+                            .eq(LearningPath::getStudentId, studentId)
+                            .eq(LearningPath::getCourseId, courseId)
+                            .in(LearningPath::getStatus, "GENERATED", "IN_PROGRESS")
+                            .orderByDesc(LearningPath::getGeneratedAt)
+                            .last("LIMIT 1"));
+            if (existingPath != null) return existingPath;
+            throw new BusinessException("学习路径正在生成中，请勿重复操作");
+        }
+
+        try {
+            return doGeneratePath(studentId, courseId, triggerReason, operatorId);
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+
+    private LearningPath doGeneratePath(Long studentId, Long courseId, String triggerReason, Long operatorId) {
         List<LearningPath.PathStep> steps = new ArrayList<>();
         int stepOrder = 1;
 

@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.training.AuditLogServiceTest
 -------------------------------------------------------------------------------
-Tests run: 0, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.377 s -- in com.training.AuditLogServiceTest
+Tests run: 0, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.216 s -- in com.training.AuditLogServiceTest

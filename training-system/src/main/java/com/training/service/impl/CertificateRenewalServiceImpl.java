@@ -114,6 +114,13 @@ public class CertificateRenewalServiceImpl implements CertificateRenewalService 
         }
 
         try {
+            // Re-check certificate status inside lock — may have been revoked since assessRenewal
+            Certificate certForCheck = certificateMapper.selectById(certificateId);
+            if (certForCheck == null) throw new BusinessException("证书不存在");
+            if ("REVOKED".equals(certForCheck.getStatus())) {
+                throw new BusinessException("证书已撤销，无法续期");
+            }
+
             RenewalAssessmentResult assessment = assessRenewal(certificateId);
             Certificate cert = certificateMapper.selectById(certificateId);
 
@@ -195,12 +202,17 @@ public class CertificateRenewalServiceImpl implements CertificateRenewalService 
         if (!"IN_PROGRESS".equals(renewal.getStatus()))
             throw new BusinessException("续期记录状态不允许完成");
 
+        // Re-check original certificate hasn't been revoked since renewal was initiated
+        Certificate originalCert = certificateMapper.selectById(renewal.getCertificateId());
+        if (originalCert != null && "REVOKED".equals(originalCert.getStatus())) {
+            throw new BusinessException("原证书已撤销，无法完成续期");
+        }
+
         // Issue new certificate
-        Certificate oldCert = certificateMapper.selectById(renewal.getCertificateId());
         CertificateIssueRequest issueReq = new CertificateIssueRequest();
         issueReq.setStudentId(renewal.getStudentId());
         issueReq.setCourseId(renewal.getCourseId());
-        issueReq.setTitle(oldCert != null ? oldCert.getTitle() : "续期证书");
+        issueReq.setTitle(originalCert != null ? originalCert.getTitle() : "续期证书");
         Certificate newCert = certificateService.issue(issueReq, operatorId);
 
         renewal.setNewCertificateId(newCert.getId());
