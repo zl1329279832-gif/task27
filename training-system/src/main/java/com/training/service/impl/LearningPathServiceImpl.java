@@ -14,12 +14,14 @@ import com.training.service.LearningRecordService;
 import com.training.service.KnowledgePointMasteryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -37,12 +39,45 @@ public class LearningPathServiceImpl implements LearningPathService {
     private final LearningRecordService learningRecordService;
     private final KnowledgePointMasteryService knowledgePointMasteryService;
     private final AuditLogService auditLogService;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     @Transactional
     public LearningPath generatePath(Long studentId, Long courseId, String triggerReason, Long operatorId) {
+        // Distributed lock: prevent concurrent path generation for the same student+course
+        String lockKey = "path:generate:" + studentId + ":" + courseId;
+        Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        if (locked == null || !locked) {
+            throw new BusinessException("学习路径正在生成中，请勿重复操作");
+        }
+
+        try {
+            return doGeneratePath(studentId, courseId, triggerReason, operatorId);
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+
+    private LearningPath doGeneratePath(Long studentId, Long courseId, String triggerReason, Long operatorId) {
         List<LearningPath.PathStep> steps = new ArrayList<>();
         int stepOrder = 1;
+
+        // Collect existing active path steps for deduplication
+        Set<String> existingStepKeys = new HashSet<>();
+        List<LearningPath> activePaths = learningPathMapper.selectList(
+                new LambdaQueryWrapper<LearningPath>()
+                        .eq(LearningPath::getStudentId, studentId)
+                        .eq(LearningPath::getCourseId, courseId)
+                        .in(LearningPath::getStatus, "GENERATED", "IN_PROGRESS"));
+        for (LearningPath activePath : activePaths) {
+            if (activePath.getPathData() != null) {
+                for (LearningPath.PathStep step : activePath.getPathData()) {
+                    if (!"COMPLETED".equals(step.getStatus())) {
+                        existingStepKeys.add(step.getStepType() + ":" + step.getTargetId());
+                    }
+                }
+            }
+        }
 
         // 1. Incomplete chapters -> CHAPTER_STUDY steps
         try {
@@ -71,11 +106,12 @@ public class LearningPathServiceImpl implements LearningPathService {
             for (KnowledgePointMastery mastery : unmastered) {
                 KnowledgePoint kp = knowledgePointMapper.selectById(mastery.getKnowledgePointId());
                 if (kp != null && kp.getChapterId() != null) {
-                    // Check if this chapter is already in steps
+                    // Check if this chapter is already in current steps or in existing active paths
                     boolean alreadyInSteps = steps.stream()
                             .anyMatch(s -> "CHAPTER_STUDY".equals(s.getStepType())
                                     && kp.getChapterId().equals(s.getTargetId()));
-                    if (!alreadyInSteps) {
+                    String stepKey = "MAKEUP_CHAPTER:" + kp.getChapterId();
+                    if (!alreadyInSteps && !existingStepKeys.contains(stepKey)) {
                         Chapter chapter = chapterMapper.selectById(kp.getChapterId());
                         steps.add(LearningPath.PathStep.builder()
                                 .stepOrder(stepOrder++)
@@ -102,6 +138,9 @@ public class LearningPathServiceImpl implements LearningPathService {
         for (AnswerSheet sheet : failedSheets) {
             if (processedExamIds.contains(sheet.getExamId())) continue;
             processedExamIds.add(sheet.getExamId());
+            // Skip if this exam already has a pending step in an existing active path
+            String stepKey = "MAKEUP_EXAM:" + sheet.getExamId();
+            if (existingStepKeys.contains(stepKey)) continue;
             steps.add(LearningPath.PathStep.builder()
                     .stepOrder(stepOrder++)
                     .stepType("MAKEUP_EXAM")
@@ -127,12 +166,7 @@ public class LearningPathServiceImpl implements LearningPathService {
                     .build());
         }
 
-        // Expire previous active paths
-        List<LearningPath> activePaths = learningPathMapper.selectList(
-                new LambdaQueryWrapper<LearningPath>()
-                        .eq(LearningPath::getStudentId, studentId)
-                        .eq(LearningPath::getCourseId, courseId)
-                        .in(LearningPath::getStatus, "GENERATED", "IN_PROGRESS"));
+        // Expire previous active paths (reuse activePaths already fetched for dedup)
         for (LearningPath oldPath : activePaths) {
             oldPath.setStatus("EXPIRED");
             learningPathMapper.updateById(oldPath);

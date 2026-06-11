@@ -13,10 +13,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -31,12 +34,18 @@ class KnowledgePointMasteryServiceTest {
     @Mock private QuestionKnowledgePointMapper questionKnowledgePointMapper;
     @Mock private AnswerSheetMapper answerSheetMapper;
     @Mock private AuditLogService auditLogService;
+    @Mock private RedisTemplate<String, Object> redisTemplate;
+    @Mock private ValueOperations<String, Object> valueOperations;
 
     @InjectMocks
     private KnowledgePointMasteryServiceImpl knowledgePointMasteryService;
 
     @BeforeEach
     void setUp() {
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        // Default: lock acquisition succeeds
+        lenient().when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
         // 默认无已存在的掌握记录，部分测试不会调用 selectOne，因此使用 lenient
         lenient().when(masteryMapper.selectOne(any())).thenReturn(null);
     }
@@ -245,6 +254,41 @@ class KnowledgePointMasteryServiceTest {
                     eq("STUDENT"),
                     any()
             );
+        }
+
+        @Test
+        @DisplayName("should use Redis lock to prevent concurrent mastery updates")
+        void shouldUseRedisLockForConcurrentProtection() {
+            AnswerDetail detail = AnswerDetail.builder()
+                    .id(1L).answerSheetId(100L).questionId(1L).isCorrect(1).build();
+            when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
+            when(questionKnowledgePointMapper.selectList(any()))
+                    .thenReturn(List.of(QuestionKnowledgePoint.builder().questionId(1L).knowledgePointId(10L).build()));
+            when(masteryMapper.selectOne(any())).thenReturn(null);
+
+            knowledgePointMasteryService.updateMasteryFromExam(1L, 10L, 100L);
+
+            // Verify lock was acquired with correct key
+            verify(valueOperations).setIfAbsent(
+                    eq("mastery:update:1:10"), any(), anyLong(), any(TimeUnit.class));
+            // Verify lock was released
+            verify(redisTemplate).delete("mastery:update:1:10");
+        }
+
+        @Test
+        @DisplayName("should reject when lock is already held by concurrent update")
+        void shouldRejectWhenLockAlreadyHeld() {
+            // Lock already held
+            when(valueOperations.setIfAbsent(
+                    eq("mastery:update:1:10"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            assertThrows(Exception.class,
+                    () -> knowledgePointMasteryService.updateMasteryFromExam(1L, 10L, 100L));
+
+            // No DB writes should have occurred
+            verify(masteryMapper, never()).insert(any());
+            verify(masteryMapper, never()).updateById(any());
         }
     }
 

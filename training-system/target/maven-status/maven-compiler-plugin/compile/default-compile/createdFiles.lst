@@ -156,6 +156,7 @@ com\training\controller\LearningRecordController.class
 com\training\controller\CertificateRenewalRuleController.class
 com\training\entity\dto\KnowledgePointRequest.class
 com\training\service\CertificateRenewalService.class
+com\training\service\impl\CertificateRenewalServiceImpl$1.class
 com\training\entity\ClazzCourse$ClazzCourseBuilder.class
 com\training\entity\dto\HeartbeatRequest.class
 com\training\mapper\ExamMapper.class

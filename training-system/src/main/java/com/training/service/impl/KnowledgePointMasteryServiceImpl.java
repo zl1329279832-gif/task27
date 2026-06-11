@@ -1,12 +1,14 @@
 package com.training.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.training.common.BusinessException;
 import com.training.entity.*;
 import com.training.mapper.*;
 import com.training.service.AuditLogService;
 import com.training.service.KnowledgePointMasteryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,6 +16,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -26,10 +29,26 @@ public class KnowledgePointMasteryServiceImpl implements KnowledgePointMasterySe
     private final QuestionKnowledgePointMapper questionKnowledgePointMapper;
     private final AnswerSheetMapper answerSheetMapper;
     private final AuditLogService auditLogService;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     @Override
     @Transactional
     public void updateMasteryFromExam(Long studentId, Long courseId, Long answerSheetId) {
+        // Distributed lock: prevent concurrent mastery updates from racing on read-modify-write
+        String lockKey = "mastery:update:" + studentId + ":" + courseId;
+        Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        if (locked == null || !locked) {
+            throw new BusinessException("知识点掌握度正在更新中，请稍后重试");
+        }
+
+        try {
+            doUpdateMasteryFromExam(studentId, courseId, answerSheetId);
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+
+    private void doUpdateMasteryFromExam(Long studentId, Long courseId, Long answerSheetId) {
         List<AnswerDetail> details = answerDetailMapper.selectList(
                 new LambdaQueryWrapper<AnswerDetail>()
                         .eq(AnswerDetail::getAnswerSheetId, answerSheetId));

@@ -53,6 +53,9 @@ class ExamServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        // Default: lock acquisition succeeds (tests that need it to fail override this)
+        lenient().when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
 
         publishedExam = Exam.builder()
                 .id(1L)
@@ -557,13 +560,16 @@ class ExamServiceTest {
                     .build();
 
             when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            // Idempotent key not held — timeout can proceed
+            when(valueOperations.setIfAbsent(contains("submit:"), eq("timeout"), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
             when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
             examService.handleTimeout(1L);
 
             // Verify status changed to TIMED_OUT
-            verify(answerSheetMapper).updateById(argThat(s ->
+            verify(answerSheetMapper, atLeast(1)).updateById(argThat(s ->
                     "TIMED_OUT".equals(s.getStatus())));
 
             // Redis timeout key should be cleaned
@@ -587,6 +593,27 @@ class ExamServiceTest {
             // Should not proceed with grading
             verify(examMapper, never()).selectById(anyLong());
             verify(answerDetailMapper, never()).selectList(any());
+        }
+
+        @Test
+        @DisplayName("handleTimeout should skip when submitExam idempotent key already held")
+        void handleTimeoutShouldSkipWhenSubmitAlreadyInProgress() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(1L).examId(1L).studentId(1L).attemptNo(1)
+                    .status("IN_PROGRESS").tabSwitchCount(0)
+                    .build();
+
+            when(answerSheetMapper.selectById(1L)).thenReturn(sheet);
+            // Idempotent key already held by submitExam
+            when(valueOperations.setIfAbsent(contains("submit:"), eq("timeout"), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            examService.handleTimeout(1L);
+
+            // Should NOT proceed with grading — submitExam is handling it
+            verify(examMapper, never()).selectById(anyLong());
+            verify(answerDetailMapper, never()).selectList(any());
+            verify(gradeMapper, never()).insert(any());
         }
     }
 
@@ -617,6 +644,8 @@ class ExamServiceTest {
 
             when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            // Redis INCR returns 4 (exceeds maxTabSwitches=3)
+            when(valueOperations.increment(eq("exam:tabswitch:1"))).thenReturn(4L);
             when(answerDetailMapper.selectList(any())).thenReturn(List.of(detail));
 
             examService.reportTabSwitch(1L, 1L);
@@ -635,11 +664,38 @@ class ExamServiceTest {
 
             when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            // Redis INCR returns 2 (under maxTabSwitches=3)
+            when(valueOperations.increment(eq("exam:tabswitch:1"))).thenReturn(2L);
 
             examService.reportTabSwitch(1L, 1L);
 
             verify(answerSheetMapper, times(1)).updateById(any(AnswerSheet.class));
             verify(answerDetailMapper, never()).selectList(any());
+        }
+
+        @Test
+        @DisplayName("should use atomic Redis INCR for tab switch counting to prevent lost increments")
+        void shouldUseAtomicRedisIncrForTabSwitchCounting() {
+            AnswerSheet sheet = AnswerSheet.builder()
+                    .id(5L).examId(1L).studentId(1L)
+                    .status("IN_PROGRESS").tabSwitchCount(0).build();
+
+            when(answerSheetMapper.selectOne(any())).thenReturn(sheet);
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            // First INCR call returns 1 (key created)
+            when(valueOperations.increment(eq("exam:tabswitch:5"))).thenReturn(1L);
+
+            examService.reportTabSwitch(1L, 1L);
+
+            // Verify Redis INCR was used instead of read-modify-write
+            verify(valueOperations).increment("exam:tabswitch:5");
+            // Verify expiry was set since this is the first increment
+            verify(redisTemplate).expire(eq("exam:tabswitch:5"), anyLong(), eq(TimeUnit.MINUTES));
+
+            // Verify DB was updated with the Redis-sourced count
+            ArgumentCaptor<AnswerSheet> captor = ArgumentCaptor.forClass(AnswerSheet.class);
+            verify(answerSheetMapper).updateById(captor.capture());
+            assertEquals(1, captor.getValue().getTabSwitchCount());
         }
     }
 
@@ -663,6 +719,8 @@ class ExamServiceTest {
                     .build();
 
             when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            when(valueOperations.setIfAbsent(eq("exam:start:1:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
             when(answerSheetMapper.selectCount(any())).thenReturn(0L);
             when(answerSheetMapper.selectOne(any())).thenReturn(existingSheet);
             when(answerDetailMapper.selectList(any())).thenReturn(Collections.singletonList(
@@ -675,6 +733,26 @@ class ExamServiceTest {
 
             assertTrue(response.getResumed());
             assertEquals(100L, response.getAnswerSheetId());
+            verify(answerSheetMapper, never()).insert(any());
+            // Lock must be released
+            verify(redisTemplate).delete("exam:start:1:1");
+        }
+
+        @Test
+        @DisplayName("should reject concurrent start when Redis lock is already held")
+        void shouldRejectConcurrentStartWhenLockHeld() {
+            when(examMapper.selectById(1L)).thenReturn(publishedExam);
+            // Simulate lock already held by another request
+            when(valueOperations.setIfAbsent(eq("exam:start:1:1"), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> examService.startExam(1L, 1L));
+            assertTrue(ex.getMessage().contains("请勿重复操作"));
+
+            // No DB operations should have happened
+            verify(answerSheetMapper, never()).selectCount(any());
+            verify(answerSheetMapper, never()).selectOne(any());
             verify(answerSheetMapper, never()).insert(any());
         }
     }

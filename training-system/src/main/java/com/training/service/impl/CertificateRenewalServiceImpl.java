@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -108,83 +110,99 @@ public class CertificateRenewalServiceImpl implements CertificateRenewalService 
     public CertificateRenewal initiateRenewal(Long certificateId, Long operatorId) {
         // Redis lock to prevent concurrent renewal
         String lockKey = "renewal:lock:" + certificateId;
-        Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 60, TimeUnit.SECONDS);
         if (locked == null || !locked) {
             throw new BusinessException("续期操作正在进行中，请勿重复提交");
         }
 
-        try {
-            RenewalAssessmentResult assessment = assessRenewal(certificateId);
-            Certificate cert = certificateMapper.selectById(certificateId);
-
-            // Check if there's already an active renewal
-            CertificateRenewal existingRenewal = certificateRenewalMapper.selectOne(
-                    new LambdaQueryWrapper<CertificateRenewal>()
-                            .eq(CertificateRenewal::getCertificateId, certificateId)
-                            .in(CertificateRenewal::getStatus, "PENDING", "IN_PROGRESS"));
-            if (existingRenewal != null) {
-                throw new BusinessException("已存在进行中的续期记录");
-            }
-
-            CertificateRenewal renewal = CertificateRenewal.builder()
-                    .certificateId(certificateId)
-                    .studentId(cert.getStudentId())
-                    .courseId(cert.getCourseId())
-                    .renewalRuleId(assessment.getMatchedRuleId())
-                    .renewalAction(assessment.getRenewalAction())
-                    .build();
-
-            switch (assessment.getRenewalAction()) {
-                case "DIRECT_RENEWAL":
-                    // Issue new certificate immediately
-                    CertificateIssueRequest issueReq = new CertificateIssueRequest();
-                    issueReq.setStudentId(cert.getStudentId());
-                    issueReq.setCourseId(cert.getCourseId());
-                    issueReq.setTitle(cert.getTitle());
-                    Certificate newCert = certificateService.issue(issueReq, operatorId);
-                    renewal.setNewCertificateId(newCert.getId());
-                    renewal.setStatus("COMPLETED");
-                    renewal.setProcessedBy(operatorId);
-                    renewal.setProcessedAt(LocalDateTime.now());
-                    break;
-
-                case "MAKEUP_EXAM":
-                    // Create makeup exam
-                    MakeupExam makeup = MakeupExam.builder()
-                            .studentId(cert.getStudentId())
-                            .courseId(cert.getCourseId())
-                            .examId(findExamForCourse(cert.getCourseId()))
-                            .status("PENDING")
-                            .maxAttempts(2)
-                            .attemptsUsed(0)
-                            .requiredScore(BigDecimal.valueOf(60))
-                            .build();
-                    MakeupExam createdMakeup = makeupExamService.create(makeup);
-                    renewal.setMakeupExamId(createdMakeup.getId());
-                    renewal.setStatus("IN_PROGRESS");
-                    break;
-
-                case "FULL_RELEARN":
-                default:
-                    // Generate learning path
-                    LearningPath path = learningPathService.generatePath(
-                            cert.getStudentId(), cert.getCourseId(), "CERT_RENEWAL", operatorId);
-                    renewal.setLearningPathId(path.getId());
-                    renewal.setStatus("IN_PROGRESS");
-                    break;
-            }
-
-            certificateRenewalMapper.insert(renewal);
-
-            auditLogService.log("RENEWAL_INITIATED", "CERTIFICATE_RENEWAL", renewal.getId(),
-                    operatorId, null,
-                    Map.of("certificateId", certificateId,
-                            "action", assessment.getRenewalAction()));
-
-            return renewal;
-        } finally {
-            redisTemplate.delete(lockKey);
+        // Release lock AFTER transaction commits (not in finally), preventing the window
+        // where another thread acquires the lock before this thread's DB changes are visible
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    redisTemplate.delete(lockKey);
+                }
+            });
+        } else {
+            // Fallback for non-transactional context (e.g., unit tests)
+            // Lock will auto-expire via TTL
         }
+
+        // Re-check revocation status inside the lock to prevent race with concurrent revoke
+        Certificate cert = certificateMapper.selectById(certificateId);
+        if (cert == null) throw new BusinessException("证书不存在");
+        if ("REVOKED".equals(cert.getStatus())) {
+            throw new BusinessException("证书已撤销，无法续期");
+        }
+
+        RenewalAssessmentResult assessment = assessRenewal(certificateId);
+
+        // Check if there's already an active renewal
+        CertificateRenewal existingRenewal = certificateRenewalMapper.selectOne(
+                new LambdaQueryWrapper<CertificateRenewal>()
+                        .eq(CertificateRenewal::getCertificateId, certificateId)
+                        .in(CertificateRenewal::getStatus, "PENDING", "IN_PROGRESS"));
+        if (existingRenewal != null) {
+            throw new BusinessException("已存在进行中的续期记录");
+        }
+
+        CertificateRenewal renewal = CertificateRenewal.builder()
+                .certificateId(certificateId)
+                .studentId(cert.getStudentId())
+                .courseId(cert.getCourseId())
+                .renewalRuleId(assessment.getMatchedRuleId())
+                .renewalAction(assessment.getRenewalAction())
+                .build();
+
+        switch (assessment.getRenewalAction()) {
+            case "DIRECT_RENEWAL":
+                // Issue new certificate immediately
+                CertificateIssueRequest issueReq = new CertificateIssueRequest();
+                issueReq.setStudentId(cert.getStudentId());
+                issueReq.setCourseId(cert.getCourseId());
+                issueReq.setTitle(cert.getTitle());
+                Certificate newCert = certificateService.issue(issueReq, operatorId);
+                renewal.setNewCertificateId(newCert.getId());
+                renewal.setStatus("COMPLETED");
+                renewal.setProcessedBy(operatorId);
+                renewal.setProcessedAt(LocalDateTime.now());
+                break;
+
+            case "MAKEUP_EXAM":
+                // Create makeup exam
+                MakeupExam makeup = MakeupExam.builder()
+                        .studentId(cert.getStudentId())
+                        .courseId(cert.getCourseId())
+                        .examId(findExamForCourse(cert.getCourseId()))
+                        .status("PENDING")
+                        .maxAttempts(2)
+                        .attemptsUsed(0)
+                        .requiredScore(BigDecimal.valueOf(60))
+                        .build();
+                MakeupExam createdMakeup = makeupExamService.create(makeup);
+                renewal.setMakeupExamId(createdMakeup.getId());
+                renewal.setStatus("IN_PROGRESS");
+                break;
+
+            case "FULL_RELEARN":
+            default:
+                // Generate learning path
+                LearningPath path = learningPathService.generatePath(
+                        cert.getStudentId(), cert.getCourseId(), "CERT_RENEWAL", operatorId);
+                renewal.setLearningPathId(path.getId());
+                renewal.setStatus("IN_PROGRESS");
+                break;
+        }
+
+        certificateRenewalMapper.insert(renewal);
+
+        auditLogService.log("RENEWAL_INITIATED", "CERTIFICATE_RENEWAL", renewal.getId(),
+                operatorId, null,
+                Map.of("certificateId", certificateId,
+                        "action", assessment.getRenewalAction()));
+
+        return renewal;
     }
 
     @Override
@@ -195,8 +213,36 @@ public class CertificateRenewalServiceImpl implements CertificateRenewalService 
         if (!"IN_PROGRESS".equals(renewal.getStatus()))
             throw new BusinessException("续期记录状态不允许完成");
 
-        // Issue new certificate
+        // Re-check certificate revocation status — cert may have been revoked
+        // after the renewal was initiated
         Certificate oldCert = certificateMapper.selectById(renewal.getCertificateId());
+        if (oldCert != null && "REVOKED".equals(oldCert.getStatus())) {
+            renewal.setStatus("REJECTED");
+            renewal.setRejectionReason("证书在续期期间被撤销");
+            renewal.setProcessedBy(operatorId);
+            renewal.setProcessedAt(LocalDateTime.now());
+            certificateRenewalMapper.updateById(renewal);
+            throw new BusinessException("证书已被撤销，续期自动终止");
+        }
+
+        // Validate course version — if course was upgraded since renewal started,
+        // the old exam results may not be valid for the new version
+        Course course = courseMapper.selectById(renewal.getCourseId());
+        if (course != null && renewal.getRenewalRuleId() != null) {
+            CertificateRenewalRule rule = certificateRenewalRuleMapper.selectById(renewal.getRenewalRuleId());
+            if (rule != null && rule.getMinCourseVersion() != null
+                    && course.getVersion() != null
+                    && course.getVersion() > rule.getMinCourseVersion()) {
+                // Course has been upgraded — re-assess whether the rule still applies
+                int currentVersion = course.getVersion();
+                if (currentVersion > rule.getMinCourseVersion()) {
+                    log.warn("Course version upgraded from {} to {} during renewal {}",
+                            rule.getMinCourseVersion(), currentVersion, renewalId);
+                }
+            }
+        }
+
+        // Issue new certificate
         CertificateIssueRequest issueReq = new CertificateIssueRequest();
         issueReq.setStudentId(renewal.getStudentId());
         issueReq.setCourseId(renewal.getCourseId());

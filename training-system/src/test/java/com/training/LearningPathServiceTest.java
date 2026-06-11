@@ -9,6 +9,7 @@ import com.training.service.AuditLogService;
 import com.training.service.KnowledgePointMasteryService;
 import com.training.service.LearningRecordService;
 import com.training.service.impl.LearningPathServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -24,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -63,8 +67,22 @@ class LearningPathServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private RedisTemplate<String, Object> redisTemplate;
+
+    @Mock
+    private ValueOperations<String, Object> valueOperations;
+
     @InjectMocks
     private LearningPathServiceImpl learningPathService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        // Default: lock acquisition succeeds
+        lenient().when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
+    }
 
     // ========================================================================
     // generatePath tests
@@ -466,6 +484,73 @@ class LearningPathServiceTest {
 
             // Verify audit log was still written
             verify(auditLogService).log(anyString(), anyString(), any(), any(), isNull(), any(Map.class));
+        }
+
+        @Test
+        @DisplayName("should deduplicate MAKEUP_EXAM steps against existing active paths")
+        void shouldDeduplicateMakeupExamStepsAgainstExistingPaths() {
+            Long studentId = 9L;
+            Long courseId = 90L;
+
+            // No incomplete chapters
+            when(learningRecordService.getChapterProgress(studentId, courseId))
+                    .thenReturn(Collections.emptyList());
+
+            // No unmastered KPs
+            when(knowledgePointMasteryService.getUnmasteredPoints(studentId, courseId, 60.0))
+                    .thenReturn(Collections.emptyList());
+
+            // Failed exam for examId=5
+            AnswerSheet failedSheet = AnswerSheet.builder()
+                    .id(1L).examId(5L).studentId(studentId)
+                    .pass(0).status("GRADED").build();
+            when(answerSheetMapper.selectList(any()))
+                    .thenReturn(List.of(failedSheet))
+                    .thenReturn(Collections.emptyList());
+
+            // Existing active path already has a PENDING MAKEUP_EXAM step for examId=5
+            List<LearningPath.PathStep> existingSteps = new ArrayList<>();
+            existingSteps.add(LearningPath.PathStep.builder()
+                    .stepOrder(1).stepType("MAKEUP_EXAM").targetId(5L)
+                    .targetTitle("补考: 考试#5").status("PENDING").build());
+            LearningPath existingPath = LearningPath.builder()
+                    .id(50L).studentId(studentId).courseId(courseId)
+                    .status("GENERATED").pathData(existingSteps).build();
+            when(learningPathMapper.selectList(any())).thenReturn(List.of(existingPath));
+
+            // Execute
+            LearningPath path = learningPathService.generatePath(studentId, courseId, "EXAM_FAILED", 99L);
+
+            // The MAKEUP_EXAM step for examId=5 should be skipped (already in existing active path)
+            assertNotNull(path);
+            boolean hasDuplicateMakeupExam = path.getPathData().stream()
+                    .anyMatch(s -> "MAKEUP_EXAM".equals(s.getStepType()) && s.getTargetId().equals(5L));
+            assertFalse(hasDuplicateMakeupExam,
+                    "不应为已存在补学步骤的考试生成重复的MAKEUP_EXAM步骤");
+
+            // No MakeupExam record should be created for the duplicate
+            verify(makeupExamMapper, never()).insert(any());
+        }
+
+        @Test
+        @DisplayName("should reject concurrent path generation with Redis lock")
+        void shouldRejectConcurrentPathGeneration() {
+            Long studentId = 10L;
+            Long courseId = 100L;
+
+            // Lock already held by another request
+            when(valueOperations.setIfAbsent(
+                    eq("path:generate:" + studentId + ":" + courseId),
+                    any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> learningPathService.generatePath(studentId, courseId, "EXAM_FAILED", 99L));
+            assertTrue(ex.getMessage().contains("请勿重复操作"));
+
+            // No DB operations should have occurred
+            verify(learningPathMapper, never()).selectList(any());
+            verify(learningPathMapper, never()).insert(any());
         }
     }
 

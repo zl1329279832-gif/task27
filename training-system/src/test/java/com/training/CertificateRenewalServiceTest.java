@@ -347,6 +347,9 @@ class CertificateRenewalServiceTest {
             when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
                     .thenReturn(true);
 
+            // cert is valid (re-check inside lock)
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
+
             // assessRenewal prerequisites
             setupAssessRenewalBaseMocks();
             CertificateRenewalRule rule = CertificateRenewalRule.builder()
@@ -369,16 +372,17 @@ class CertificateRenewalServiceTest {
 
             // No new renewal should have been inserted
             verify(certificateRenewalMapper, never()).insert(any());
-            // Lock must still be released in the finally block
-            verify(redisTemplate).delete(eq("renewal:lock:1"));
         }
 
         @Test
-        @DisplayName("should use Redis lock")
+        @DisplayName("should use Redis lock with post-commit release")
         void shouldUseRedisLock() {
             // Redis lock succeeds
             when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
                     .thenReturn(true);
+
+            // cert is valid
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
 
             // assessRenewal prerequisites
             setupAssessRenewalBaseMocks();
@@ -404,10 +408,27 @@ class CertificateRenewalServiceTest {
             verify(valueOperations).setIfAbsent(
                     lockKeyCaptor.capture(), eq("1"), ttlCaptor.capture(), eq(TimeUnit.SECONDS));
             assertEquals("renewal:lock:1", lockKeyCaptor.getValue());
-            assertEquals(30L, ttlCaptor.getValue());
+            assertEquals(60L, ttlCaptor.getValue());
+            // In unit tests (no active synchronization), lock auto-expires via TTL
+        }
 
-            // Verify the lock was released in the finally block
-            verify(redisTemplate).delete(eq("renewal:lock:1"));
+        @Test
+        @DisplayName("CRITICAL: should re-check revocation status inside lock to prevent race with concurrent revoke")
+        void shouldReCheckRevocationInsideLock() {
+            // Redis lock succeeds
+            when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
+
+            // Cert was revoked between the time user clicked "renew" and lock acquisition
+            when(certificateMapper.selectById(1L)).thenReturn(revokedCert);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateRenewalService.initiateRenewal(1L, 1L));
+            assertTrue(ex.getMessage().contains("证书已撤销"));
+
+            // Should NOT proceed to assessRenewal or insert
+            verify(certificateRenewalMapper, never()).insert(any());
+            verify(sysUserMapper, never()).selectById(anyLong());
         }
     }
 
@@ -429,6 +450,7 @@ class CertificateRenewalServiceTest {
                     .build();
             when(certificateRenewalMapper.selectById(50L)).thenReturn(renewal);
             when(certificateMapper.selectById(1L)).thenReturn(validCert);
+            when(courseMapper.selectById(10L)).thenReturn(course);
 
             Certificate newCert = Certificate.builder().id(300L).build();
             when(certificateService.issue(any(CertificateIssueRequest.class), eq(99L)))
@@ -475,6 +497,71 @@ class CertificateRenewalServiceTest {
 
             verify(certificateRenewalMapper, never()).updateById(any());
             verify(certificateService, never()).issue(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("CRITICAL: should reject completion when certificate was revoked after renewal initiated")
+        void shouldRejectCompletionWhenCertRevokedDuringRenewal() {
+            CertificateRenewal renewal = CertificateRenewal.builder()
+                    .id(50L).certificateId(1L)
+                    .studentId(1L).courseId(10L)
+                    .status("IN_PROGRESS")
+                    .build();
+            when(certificateRenewalMapper.selectById(50L)).thenReturn(renewal);
+
+            // Certificate was revoked after renewal was initiated
+            when(certificateMapper.selectById(1L)).thenReturn(revokedCert);
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> certificateRenewalService.completeRenewal(50L, 99L));
+            assertTrue(ex.getMessage().contains("证书已被撤销"));
+
+            // Verify the renewal was auto-rejected
+            ArgumentCaptor<CertificateRenewal> captor = ArgumentCaptor.forClass(CertificateRenewal.class);
+            verify(certificateRenewalMapper).updateById(captor.capture());
+            CertificateRenewal rejected = captor.getValue();
+            assertEquals("REJECTED", rejected.getStatus());
+            assertTrue(rejected.getRejectionReason().contains("撤销"));
+
+            // No new certificate should be issued
+            verify(certificateService, never()).issue(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("should complete renewal even when course version upgraded (with warning log)")
+        void shouldCompleteRenewalWhenCourseVersionUpgraded() {
+            CertificateRenewal renewal = CertificateRenewal.builder()
+                    .id(50L).certificateId(1L)
+                    .studentId(1L).courseId(10L)
+                    .renewalRuleId(100L)
+                    .status("IN_PROGRESS")
+                    .build();
+            when(certificateRenewalMapper.selectById(50L)).thenReturn(renewal);
+            when(certificateMapper.selectById(1L)).thenReturn(validCert);
+
+            // Course version upgraded from 2 to 5 during renewal
+            Course upgradedCourse = Course.builder().id(10L).version(5).build();
+            when(courseMapper.selectById(10L)).thenReturn(upgradedCourse);
+
+            // Rule had minCourseVersion=2
+            CertificateRenewalRule rule = CertificateRenewalRule.builder()
+                    .id(100L).courseId(10L)
+                    .minCourseVersion(2)
+                    .renewalAction("MAKEUP_EXAM")
+                    .build();
+            when(certificateRenewalRuleMapper.selectById(100L)).thenReturn(rule);
+
+            Certificate newCert = Certificate.builder().id(400L).build();
+            when(certificateService.issue(any(CertificateIssueRequest.class), eq(99L)))
+                    .thenReturn(newCert);
+
+            // Should still complete (version mismatch is logged as warning, not blocking)
+            certificateRenewalService.completeRenewal(50L, 99L);
+
+            ArgumentCaptor<CertificateRenewal> captor = ArgumentCaptor.forClass(CertificateRenewal.class);
+            verify(certificateRenewalMapper).updateById(captor.capture());
+            assertEquals("COMPLETED", captor.getValue().getStatus());
+            assertEquals(400L, captor.getValue().getNewCertificateId());
         }
     }
 

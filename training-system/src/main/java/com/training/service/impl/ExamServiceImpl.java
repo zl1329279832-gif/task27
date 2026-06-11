@@ -172,6 +172,23 @@ public class ExamServiceImpl implements ExamService {
         if (exam.getEndTime() != null && now.isAfter(exam.getEndTime()))
             throw new BusinessException("考试已结束");
 
+        // Distributed lock: prevent concurrent startExam creating duplicate IN_PROGRESS sheets
+        String lockKey = "exam:start:" + examId + ":" + studentId;
+        Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+        if (locked == null || !locked) {
+            throw new BusinessException("考试正在开始中，请勿重复操作");
+        }
+
+        try {
+            return doStartExam(examId, studentId, exam);
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+
+    private ExamStartResponse doStartExam(Long examId, Long studentId, Exam exam) {
+        LocalDateTime now = LocalDateTime.now();
+
         // Check attempt count
         long attemptCount = answerSheetMapper.selectCount(
                 new LambdaQueryWrapper<AnswerSheet>()
@@ -555,7 +572,17 @@ public class ExamServiceImpl implements ExamService {
         if (sheet == null) return;
 
         Exam exam = examMapper.selectById(examId);
-        sheet.setTabSwitchCount(sheet.getTabSwitchCount() + 1);
+
+        // Atomic increment via Redis to prevent read-modify-write race
+        String tabSwitchKey = "exam:tabswitch:" + sheet.getId();
+        Long newCount = redisTemplate.opsForValue().increment(tabSwitchKey);
+        if (newCount == null) newCount = 1L;
+        // Set expiry if this is the first increment (key was just created)
+        if (newCount == 1L) {
+            redisTemplate.expire(tabSwitchKey, exam.getDurationMinutes() + 30, TimeUnit.MINUTES);
+        }
+
+        sheet.setTabSwitchCount(newCount.intValue());
         answerSheetMapper.updateById(sheet);
 
         // Auto-submit if exceeds max tab switches
@@ -570,6 +597,23 @@ public class ExamServiceImpl implements ExamService {
     public void handleTimeout(Long answerSheetId) {
         AnswerSheet sheet = answerSheetMapper.selectById(answerSheetId);
         if (sheet == null || !"IN_PROGRESS".equals(sheet.getStatus())) return;
+
+        // Use the same idempotent key as submitExam to prevent race between
+        // manual submission and timeout auto-submission
+        String idempotentKey = "submit:" + sheet.getExamId() + ":" + sheet.getStudentId() + ":" + sheet.getAttemptNo();
+        Boolean isFirst = redisTemplate.opsForValue().setIfAbsent(idempotentKey, "timeout", 30, TimeUnit.SECONDS);
+        if (isFirst != null && !isFirst) {
+            // Another submission (manual or timeout) is already in progress
+            log.info("Skipping timeout for sheet {}: submission already in progress", answerSheetId);
+            return;
+        }
+
+        // Re-read to guard against status change between first check and lock acquisition
+        sheet = answerSheetMapper.selectById(answerSheetId);
+        if (sheet == null || !"IN_PROGRESS".equals(sheet.getStatus())) {
+            redisTemplate.delete(idempotentKey);
+            return;
+        }
 
         Exam exam = examMapper.selectById(sheet.getExamId());
         autoGrade(sheet, exam, "TIMED_OUT");
